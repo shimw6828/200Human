@@ -1,0 +1,2694 @@
+---
+title: "All Script"
+author: "shimw"
+date: "2024-04-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("/home/shimw/project/200Human/")
+```
+
+## 问卷结果 000.questionnaire.R
+
+整理了问卷代码
+
+```{r}
+q1 = readxl::read_xlsx("./data/问卷/体检问卷结果.xlsx")
+q2 = readxl::read_xlsx("./data/问卷/健康状况调查问卷_数据详情表_原始数据_202401291411.xlsx")%>% # 去重保留最后一次记录
+  group_by(`Q1_您的姓名`)  %>% slice( n() ) %>% tibble()
+q3 = readxl::read_xlsx("./data/问卷/体检报告20231216.xlsx")
+
+#### 计算宏观衰弱指数 ####
+f1 = q1[, c(1,2,3,5,6,9,10)]
+f2_column = c(3,14,15,16,17,18,19,20,21,22,23,24)
+f2 = q2[, f2_column]
+# 计算缺少的人
+f1$name[!f1$name%in%q3$姓名]
+f_final = left_join(f1[f1$name%in%q3$姓名,], q3, by = c("name" = "姓名"))
+f_final[!f_final$name%in%f2$Q1_您的姓名,]
+f_final = left_join(f_final[f_final$name%in%f2$Q1_您的姓名,], f2, by = c("name" = "Q1_您的姓名"))
+```
+
+### 计算衰弱指数
+
+```{r}
+## 计算衰弱指数的函数
+calc_fi = function(.x){
+  # 由于apply放进来的是向量，导致变量类型全部转成了字符，需要把他转成数字
+  fi1 = as.numeric(.x[11])>=140|as.numeric(.x[12])>=90
+  fi10 = .x[60]=="是"
+  fi12 = as.numeric(.x[24])>=7
+  fi15 = case_when(as.numeric(.x[16]) >28|as.numeric(.x[16])<18.5 ~ 1,
+                   as.numeric(.x[16]) >24&as.numeric(.x[16])<=28 ~ 0.5,
+                   as.numeric(.x[16]) >=18.5|as.numeric(.x[16])<=24 ~ 0)
+  w_h = as.numeric(.x[4])/as.numeric(.x[5])
+  fi16 = case_when(w_h >=0.95&.x[2]=="男" ~ 1,
+                   w_h >=0.9&.x[2]=="女" ~ 1,
+                   w_h >=0.9&.x[2]=="男" ~ 0.5,
+                   w_h >=0.85&.x[2]=="女" ~ 0.5,
+                   w_h < 0.9&.x[2]=="男" ~ 0,
+                   w_h < 0.85&.x[2]=="女" ~ 0)
+  fi17 = as.numeric(.x[10])<60|as.numeric(.x[10])>100
+  fi18 = (as.numeric(.x[6])/as.numeric(.x[7]))<0.7
+  fi19 = .x[52]=="是"
+  fi20 = .x[53]=="是"
+  fi21 = .x[54]=="是"
+  fi22 = .x[55]=="是"
+  fi23 = .x[56]=="是"
+  fi24 = .x[57]=="是"
+  fi25 = .x[58]=="是"
+  fi26 = .x[59]=="是"
+  fi27 = .x[61]=="是"
+  fi28 = .x[62]=="是"
+  final_score = sum(c(fi1, fi10, fi12,fi15,fi16,fi17,fi18,fi19,fi20,fi21,fi22,fi23,fi24,fi25,fi26,fi27,fi28),
+                    na.rm = T)
+  return(final_score/28)
+}
+f_final$FI = apply(f_final, 1,  calc_fi)
+FI = tibble("name" = f_final$name, "frailty index" = f_final$FI)
+cor.test(f_final$age, f_final$FI)
+# plot(f_final$age, f_final$FI)
+ggplot(f_final, aes(x = age, y = FI))+
+  geom_point()+
+  geom_smooth(method = 'lm', se = F)+
+  theme_bw()+
+  annotate("text", x = 55, y = 0.18, label = "R = 0.035",
+           color="black",size = 5, angle=0, fontface="bold")
+```
+
+### 计算内在能力
+
+```{r}
+f1 = q1[, c(1,2,3,7,8,11,12)]
+f2_column = c(3,23:60)
+f2 = q2[, f2_column]
+## 进行了补充
+f_final = left_join(f1[f1$name%in%q3$姓名,], q3[,c(1,10)], by = c("name" = "姓名"))
+f_final = left_join(f_final[f_final$name%in%f2$Q1_您的姓名,], f2, by = c("name" = "Q1_您的姓名"))
+## 计算MNA
+calc_mna = function(.x){
+  # 由于apply放进来的是向量，导致变量类型全部转成了字符，需要把他转成数字
+  ## MNA 问卷
+  m1 =  case_when(.x[11]=="食欲无变化" ~ 2,
+                   .x[11]=="中度食欲不佳" ~ 1,
+                   .x[11]=="严重食欲不佳" ~ 0)
+  m2 =  case_when(.x[12]=="体重减轻>3 kg" ~ 0,
+                  .x[12]=="不知道" ~ 1,
+                  .x[12]=="体重减轻1~3 kg" ~ 2,
+                  .x[12]=="无变化" ~ 3)
+  m3 =  case_when(.x[13]=="卧床或轮椅" ~ 0,
+                  .x[13]=="可离开轮椅但无法自由走动" ~ 1,
+                  .x[13]=="可以自由走动" ~ 2)
+  m4 =  case_when(.x[14]=="是" ~ 0,
+                  .x[14]=="否" ~ 2)
+  m5 =  case_when(.x[15]=="严重痴呆或抑郁" ~ 0,
+                  .x[15]=="轻度痴呆" ~ 1,
+                  .x[15]=="无精神问题" ~ 2)
+  m6 =  case_when(as.numeric(.x[8])<19 ~ 0,
+                  as.numeric(.x[8])<21 ~ 1,
+                  as.numeric(.x[8])<23 ~ 2,
+                  TRUE ~ 3)
+  m7 =  case_when(.x[16]=="是" ~ 0,
+                  .x[16]=="否" ~ 1)
+  m8 =  case_when(.x[17]=="是" ~ 0,
+                  .x[17]=="否" ~ 1)
+  m9 =  case_when(.x[18]=="是" ~ 0,
+                  .x[18]=="否" ~ 1)
+  m10 =  case_when(.x[19]=="一餐" ~ 0,
+                  .x[19]=="两餐" ~ 1,
+                  .x[19]=="三餐以上" ~ 2)
+  m11 =  case_when(.x[20]=="是" ~ 0,
+                  .x[20]=="否" ~ 1)
+  
+  m12 =  case_when(length(strsplit(.x[21], "|"))<=1 ~ 0,
+                   length(strsplit(.x[21], "|"))==2 ~ 0.5,
+                   length(strsplit(.x[21], "|"))==3 ~ 1,)
+  m13 =  case_when(.x[22]=="少于3杯" ~ 0,
+                   .x[22]=="3 ~ 5杯" ~ 0.5,
+                   .x[22]=="大于5杯" ~ 1)
+  m14 =  case_when(.x[23]=="无人协助则无法进食" ~ 0,
+                   .x[23]=="可以自己进食但较吃力" ~ 1,
+                   .x[23]=="可以自己进食" ~ 2)
+  m15 =  case_when(.x[24]=="觉得自己营养非常不好" ~ 0,
+                   .x[24]=="不太清楚或营养不太好" ~ 1,
+                   .x[24]=="觉得自己没有营养问题" ~ 2)
+  m16 =  case_when(.x[25]=="不如同龄人" ~ 0,
+                   .x[25]=="不太清楚" ~ 0.5,
+                   .x[25]=="和同龄人差不多" ~ 1,
+                   .x[25]=="比同龄人好" ~ 2)
+  m17 =  case_when(as.numeric(.x[4])<21 ~ 0,
+                   as.numeric(.x[4])>=21&as.numeric(.x[4])<22 ~ 0.5,
+                   as.numeric(.x[4])>=2 ~ 1)
+  m18 =  case_when(as.numeric(.x[5])<31 ~ 0,
+                   as.numeric(.x[5])>=31 ~ 1)
+  MNA_score = sum(c(m1,m2,m3,m4,m5,m6,m7,m8,m9,m10,m11,m12,m13,m14,m15,m16,m17,m18), na.rm = T)
+  return(MNA_score)
+}
+## 计算CSDD
+calc_csdd = function(.x){
+  ## CSDD 问卷
+  # 34 食欲 35 体重 37 入睡 38 睡眠惊醒 39 清晨 40 自杀 41 自我  
+  CSDD_score = purrr::map(.x[c(26:33,36:37, 44)], function(.y){
+    return(case_when(.y=="没有" ~ 0,
+                     .y=="轻度或间歇" ~ 1,
+                     .y=="明显或持续" ~ 2))
+  })%>%unlist()%>%sum()
+  CSDD_score = CSDD_score+ case_when(.x[34]=="食欲正常" ~ 0,
+                                     .x[34]=="食欲不振，但仍能自己进食" ~ 1,
+                                     .x[34]=="只有在他人催促和鼓励下才进食" ~ 2)
+  CSDD_score = CSDD_score+ case_when(.x[35]=="没有" ~ 0,
+                                     .x[35]=="超过3公斤" ~ 2)
+  CSDD_score = CSDD_score+ case_when(.x[38]=="没有" ~ 0,
+                                     .x[38]=="一周中只有几个晚上入睡困难" ~ 1,
+                                     .x[38]=="每天都入睡困难" ~ 2)
+  CSDD_score = CSDD_score+ case_when(.x[39]=="没有" ~ 0,
+                                     .x[39]=="一周内只是几个晚上醒来" ~ 1,
+                                     .x[39]=="每天都晚上醒来" ~ 2)
+  CSDD_score = CSDD_score+ case_when(.x[40]=="没有" ~ 0,
+                                     .x[40]=="醒来后又能继续睡觉" ~ 1,
+                                     .x[40]=="醒来后无法继续入睡" ~ 2)
+  CSDD_score = CSDD_score+ case_when(.x[41]=="没有" ~ 0,
+                                     .x[41]=="只有被动的自杀念头，即觉得生活不值得过下去" ~ 1,
+                                     .x[41]=="有主动的自杀愿望和任何最近的自杀企图和计划" ~ 2)
+  CSDD_score = CSDD_score+ case_when(.x[42]=="没有" ~ 0,
+                                     .x[42]=="轻度或间歇" ~ 1,
+                                     .x[42]=="经常" ~ 2)
+  CSDD_score = CSDD_score+ case_when(.x[43]=="没有" ~ 0,
+                                     .x[43]=="感到悲观但能得到自己或他人安慰" ~ 1,
+                                     .x[43]=="感到悲观并不能得到安慰" ~ 2)
+  return(CSDD_score)
+}
+
+f_final$MNA = apply(f_final, 1,  calc_mna)
+f_final$CSDD = apply(f_final, 1,  calc_csdd)
+
+cor.test(f_final$age, f_final$MNA)
+cor.test(f_final$age, f_final$CSDD)
+cor.test(f_final$age, f_final$SPPB)
+## 内在能力求和
+ic_score = case_when(f_final$CSDD>=18 ~ 0,
+          f_final$CSDD>=11&f_final$CSDD<=17 ~ 1,
+          f_final$CSDD<=10 ~ 2)
+ic_score = ic_score+case_when(f_final$MOCA>=27 ~ 2,
+          f_final$MOCA>=10&f_final$MOCA<=26 ~ 1,
+          f_final$MOCA<=9 ~ 0)
+ic_score = ic_score+case_when(f_final$MNA>=24 ~ 2,
+          f_final$MNA>=17&f_final$MNA<=23.5 ~ 1,
+          f_final$MNA<17 ~ 0)
+ic_score = ic_score+case_when(f_final$SPPB==10 ~ 0,
+          f_final$SPPB==11 ~ 1,
+          f_final$SPPB==12 ~ 2)
+ic_score = ic_score+case_when(f_final$`Q57_视力情况（可以使用眼镜矫正）(普通近视不算)`=="正常或轻度视力损失（可以使用眼镜矫正）" ~ 1,
+          f_final$`Q57_视力情况（可以使用眼镜矫正）(普通近视不算)`=="中度视力损失（无法使用眼镜矫正）" ~ 0.5,
+          f_final$`Q57_视力情况（可以使用眼镜矫正）(普通近视不算)`=="完全或接近失明" ~ 0)
+ic_score = ic_score+case_when(f_final$`Q58_听力状况`=="正常或轻度听力损失" ~ 1,
+          f_final$`Q58_听力状况`=="中度听力损失" ~ 0.5,
+          f_final$`Q58_听力状况`=="完全或接近失聪" ~ 0)
+
+cor.test(f_final$age, ic_score)
+f_final$IC = ic_score
+
+kkk = f_final%>%dplyr::select(name,sex,age,SPPB,MNA,MOCA, CSDD, IC)
+kkk$FI= FI$`frailty index`
+kkk$`视力`= case_when(f_final$`Q57_视力情况（可以使用眼镜矫正）(普通近视不算)`=="正常或轻度视力损失（可以使用眼镜矫正）" ~ 1,
+                    f_final$`Q57_视力情况（可以使用眼镜矫正）(普通近视不算)`=="中度视力损失（无法使用眼镜矫正）" ~ 0.5,
+                    f_final$`Q57_视力情况（可以使用眼镜矫正）(普通近视不算)`=="完全或接近失明" ~ 0)
+kkk$`听力`= case_when(f_final$`Q58_听力状况`=="正常或轻度听力损失" ~ 1,
+                    f_final$`Q58_听力状况`=="中度听力损失" ~ 0.5,
+                    f_final$`Q58_听力状况`=="完全或接近失聪" ~ 0)
+
+readr::write_excel_csv(kkk, "/home/shimw/project/200Human/result/000.questionnaire.summary.csv")
+
+ggplot(f_final, aes(x = age, y = IC))+
+  geom_point()+
+  geom_smooth(method = 'lm', se = F)+
+  theme_bw()+
+  annotate("text", x = 55, y = 6, label = "R = -0.042",
+           color="black",size = 5, angle=0, fontface="bold")
+IC = tibble("name" = f_final$name,
+            "sex" = f_final$sex,
+            "age" = f_final$age,
+            "SPPB" = f_final$SPPB,
+            "MOCA" = f_final$MOCA,
+            "MNA" = f_final$MNA,
+            "CSDD" = f_final$CSDD,
+            "intrinsic capacity" = f_final$IC)
+
+left_join(IC, FI)%>%
+  write_excel_csv("/home/shimw/project/200Human/result/000.FI.and.IC.csv")
+```
+
+### 微观特征挑选
+
+由于IC和FI和年龄相关性太弱了，这可能是由于他们的问题中很多是为老年人设置的，这会导致在统计分数时收到很多没有区分度的问题影响，因此开始检测微观特征与年龄的关系
+
+```{r}
+## 构建异常检测的函数
+
+q1 = readxl::read_xlsx("./问卷/体检问卷结果.xlsx")
+q3 = readxl::read_xlsx("./问卷/体检报告20231216.xlsx")
+f1 = q1[, c(1,2,3,5,6,9,10)]
+f_final = left_join(f1[f1$name%in%q3$姓名,], q3, by = c("name" = "姓名"))
+
+outlier_check = function(.x, .l,.m, .n,.o, .p=0,.q=0){ 
+  # .m最大值, .n最小值
+  res = case_when(as.numeric(.x)>=.l&as.numeric(.x)<.m ~ 0,
+                  as.numeric(.x)>=.m&as.numeric(.x)<.n ~ 0.5,
+                  as.numeric(.x)>=.n&as.numeric(.x)<.o ~ 0.8,
+                  as.numeric(.x)>=.o ~ 1,
+                  as.numeric(.x)<.l&as.numeric(.x)>=.p ~ 0.5,
+                  as.numeric(.x)<.p&as.numeric(.x)>=.q ~ 0.8,
+                  as.numeric(.x)<.q ~ 1,)
+  return(res)
+}
+## 首先计算本次的指标，之后再结合金域医学的结果
+normalize_clinical_indicator = f_final%>%
+  mutate(
+    "heart_rate" = case_when(`血压脉搏\r\n次/分`>=60&`血压脉搏\r\n次/分`<=90 ~ 0,
+                             TRUE ~ 1),
+    "Blood pressure-systolic" = outlier_check(`血压收缩压\r\nmmHg\r\n正常(90-140)`,90,140,160,180,80,70),
+    "Blood pressure-diastolic" = outlier_check(`血压舒张压\r\nmmHg\r\n正常(60-89)`,60,90,100,110,50,40),
+    "postprandial blood glucose" = outlier_check(`餐后两小时血糖\r\nmmol/L\r\n正常(3.9-7.8)`,3.6,7.8,11.1,14.4,2.8,2.2),
+    "BMI" = outlier_check(`体重指数\r\n正常（18.5-23.9）`,18.5,25,28,32),
+    "Total cholesterol" = outlier_check(`总胆固醇\r\nmmol/L\r\n正常（0-5.2）`,0,5.2,7.8,10.4),
+    "Triglycerides" = outlier_check(`甘油三脂\r\nmmol/L\r\n正常（<1.7）`,0,1.7,2.5,3.4),
+    "LDL-C" = outlier_check(`低密度脂蛋白\r\nmmol/L\r\n正常（0-3.33）`,0,3.4,5.1,6.8),
+    "HDL-C" = outlier_check(`高密度脂蛋白\r\nmmol/L\r\n正常（0.8-2.1）`,0.8,2.1,3.15,4.2,0.53,0.4),
+    "TG/HDL" = outlier_check(`甘油三脂\r\nmmol/L\r\n正常（<1.7）`/`高密度脂蛋白\r\nmmol/L\r\n正常（0.8-2.1）`,0,1,3,8),
+    "BUN" = outlier_check(`尿素氮（尿素）\r\nmmol/L\r\n正常（2.6-9.5）`,0,7.14,10.71,14.28),
+    "Creatinine" = case_when(sex=="男"&`肌酐\r\numol/L\r\n正常（41-73）`>50&`肌酐\r\numol/L\r\n正常（41-73）`<=109 ~ 0,
+                             sex=="女"&`肌酐\r\numol/L\r\n正常（41-73）`>40&`肌酐\r\numol/L\r\n正常（41-73）`<=97 ~ 0,
+                             sex=="男"&`肌酐\r\numol/L\r\n正常（41-73）`>109&`肌酐\r\numol/L\r\n正常（41-73）`<=177 ~ 0.5,
+                             sex=="女"&`肌酐\r\numol/L\r\n正常（41-73）`>97&`肌酐\r\numol/L\r\n正常（41-73）`<=177 ~ 0.5,
+                             `肌酐\r\numol/L\r\n正常（41-73）`>177&`肌酐\r\numol/L\r\n正常（41-73）`<=442 ~ 0.8,
+                             `肌酐\r\numol/L\r\n正常（41-73）`>442 ~ 1,
+                             TRUE ~ 0.3),
+    "Uric acid" =  outlier_check(`尿酸\r\numol/L\r\n正常（135-425）`,0,425,540,660),
+    "Fasting Glucose" =  outlier_check(`空腹血糖\r\nmmol/L\r\n正常(3.6-6.1)`,3.6,5.6,7,8,2.8,2.2),
+    "ALT" =  outlier_check(`谷丙转氨酶\r\nU/L\r\n正常(0-50)`,0,50,150,250),
+    "AST" =  outlier_check(`谷草转氨酶\r\nU/L\r\n正常(0-40)`,0,40,120,200),
+    "Total Bilirubin" =  outlier_check(`总胆红素\r\n正常(2-21)`,2,23,46,115),
+    "Direct Bilirubin" =  case_when(`直接胆红素\r\numol/L\r\n正常（0-6.8）`>=0&`直接胆红素\r\numol/L\r\n正常（0-6.8）`<=6.8 ~ 0,
+                                   TRUE ~ 1),
+    "Indirect Bilirubin" =  case_when(`间接胆红素\r\numol/L\r\n正常（0-17）`>=0&`间接胆红素\r\numol/L\r\n正常（0-17）`<=17 ~ 0,
+                                    TRUE ~ 1),
+    "Total Protein" =  outlier_check(`总蛋白\r\ng/L\r\n正常（65-85）`,65,85,127,170,43,32),
+    "Albumin" =  case_when(`白蛋白\r\ng/L\r\n正常（40-55）`>=45&`白蛋白\r\ng/L\r\n正常（40-55）`<=55 ~ 0,
+                           `白蛋白\r\ng/L\r\n正常（40-55）`>=35&`白蛋白\r\ng/L\r\n正常（40-55）`<45 ~ 0.5,
+                           `白蛋白\r\ng/L\r\n正常（40-55）`>=28&`白蛋白\r\ng/L\r\n正常（40-55）`<35 ~ 0.8,
+                           `白蛋白\r\ng/L\r\n正常（40-55）`<28 ~ 1,
+                           TRUE ~ 1),
+    "Globulin" =  outlier_check(`球蛋白\r\ng/L\r\n正常（20-40）`,20,40,60,80,13,10),
+    "A/G" =  case_when(`白球比\r\n正常（1.2-2.4）`>=1.5&`白球比\r\n正常（1.2-2.4）`<=2.4 ~ 0,
+                       `白球比\r\n正常（1.2-2.4）`<1.5 ~ 0.8,
+                       TRUE ~ 1),
+    "ALP" =  outlier_check(`碱性磷酸酶\r\nU/L\r\n正常(35-135)`,35,135,375,625),
+    "GGT" =  outlier_check(`r-谷氨酰转移酶\r\nU/L\r\n正常(7-60)`,10,60,180,300),
+    "Leukocyte" =  case_when(`白细胞\r\n10^9/L\r\n正常（3.5-9.5）`>=3.5&`白细胞\r\n10^9/L\r\n正常（3.5-9.5）`<=9.5 ~ 0,
+                             TRUE ~ 1),
+    "RBCs" =  case_when(`红细胞\r\n10^12/L\r\n正常（3.8-5.8）`>=3.8&`红细胞\r\n10^12/L\r\n正常（3.8-5.8）`<=5.8 ~ 0,
+                             TRUE ~ 1),
+    
+    "Hemoglobin" =  case_when(`血红蛋白\r\ng/L\r\n正常（115-175）`>=115&`血红蛋白\r\ng/L\r\n正常（115-175）`<=175 ~ 0,
+                              TRUE ~ 1),
+    "Platelets" =  outlier_check(`血小板\r\n10^9/L\r\n正常（125-350）`,150,450,700,900,100,75),
+    "Hct" =  case_when(`红细胞压积\r\n%\r\n正常（35-50）`>=35&`红细胞压积\r\n%\r\n正常（35-50）`<=50 ~ 0,
+                             TRUE ~ 1),
+    "MCV" =  case_when(`红细胞平均体积\r\nfL\r\n正常（82-100）`>=82&`红细胞平均体积\r\nfL\r\n正常（82-100）`<=100 ~ 0,
+                       TRUE ~ 1),
+    "PCT" =  case_when(`血小板压积\r\n%\r\n正常（0.15-0.32）`>=0.15&`血小板压积\r\n%\r\n正常（0.15-0.32）`<=0.32 ~ 0,
+                       TRUE ~ 1),
+    "PDW" =  case_when(as.numeric(`血小板分布宽度\r\nfL\r\n正常（9-17）`)>=9&as.numeric(`血小板分布宽度\r\nfL\r\n正常（9-17）`)<=17 ~ 0,
+                       TRUE ~ 1),
+    "RDW_CV" =  case_when(`RDW-CV`>=11.6&`RDW-CV`<=14.6 ~ 0,TRUE ~ 1),
+    "RDW" =  case_when(`红细胞分布宽度\r\nfL\r\n正常（37-50）`>=37&`红细胞分布宽度\r\nfL\r\n正常（37-50）`<=50 ~ 0,TRUE ~ 1),
+    "MPV" =  case_when(as.numeric(`平均血小板体积\r\nfL\r\n正常（9-13）`)>=9&as.numeric(`平均血小板体积\r\nfL\r\n正常（9-13）`)<=13 ~ 0,
+                       TRUE ~ 1),
+    "Neutrophil" =  case_when(`中性粒细胞数\r\n10^9/L\r\n正常（1.8-6.3）`>=1.8&`中性粒细胞数\r\n10^9/L\r\n正常（1.8-6.3）`<=6.3 ~ 0,
+                       TRUE ~ 1),
+    "Lymphocytes" =  case_when(`淋巴细胞数\r\n10^9/L\r\n正常（1.1-3.2）`>=1.1&`淋巴细胞数\r\n10^9/L\r\n正常（1.1-3.2）`<=3.2 ~ 0,
+                              TRUE ~ 1),
+    "Eosinophil" =  case_when(`嗜酸性粒细胞\r\n10^9/L\r\n正常（0.02-0.52）`>=0.02&`嗜酸性粒细胞\r\n10^9/L\r\n正常（0.02-0.52）`<=0.52 ~ 0,
+                               TRUE ~ 1),
+    "Basophil" =  case_when(`嗜碱性粒细胞\r\n10^9/L\r\n正常（0-0.06）`>=0&`嗜碱性粒细胞\r\n10^9/L\r\n正常（0-0.06）`<=0.06 ~ 0,
+                              TRUE ~ 1)
+  )%>%
+  dplyr::select(name,sex, age,heart_rate:Basophil)
+
+readr::write_excel_csv(normalize_clinical_indicator, "/home/shimw/project/200Human/体检报告/000.normalize_clinical_indicator.csv") # 写入文件
+normalize_clinical_indicator = readr::read_csv("/home/shimw/project/200Human/体检报告/000.normalize_clinical_indicator.csv")
+cor.test(normalize_clinical_indicator$age,rowSums(normalize_clinical_indicator[, 4:42]))
+kk = data.frame(feature = names(colSums(normalize_clinical_indicator[, 4:42])),
+           value = colSums(normalize_clinical_indicator[, 4:42]))
+library(ggsci)
+p1 = kk%>%
+  ggplot(data=.,
+         aes(feature,value))+
+  scale_fill_npg()+
+  geom_bar(stat="identity", color="black", width=0.7,size=0.25)+
+  labs(x = "",y = "outlier number")+theme_classic()+coord_flip()
+
+# 批量进行年龄的相关性计算
+library(psych)
+cor_results <- psych::corr.test(normalize_clinical_indicator[,c(-1,-2,-3)], 
+                                y = normalize_clinical_indicator$age, method = "pearson")
+# 分开性别
+M_cor_results <- psych::corr.test(normalize_clinical_indicator[normalize_clinical_indicator$sex=="男",c(-1,-2,-3)],
+                                  y = normalize_clinical_indicator$age[normalize_clinical_indicator$sex=="男"], method = "pearson")
+F_cor_results <- psych::corr.test(normalize_clinical_indicator[normalize_clinical_indicator$sex=="女",c(-1,-2,-3)],
+                                  y = normalize_clinical_indicator$age[normalize_clinical_indicator$sex=="女"], method = "pearson")
+result_df <- data.frame(
+  Variable = colnames(normalize_clinical_indicator[,c(-1,-2,-3)]),
+  Correlation = cor_results$r,
+  P_Value = cor_results$p,
+  M_Correlation = M_cor_results$r,
+  M_P_Value = M_cor_results$p,
+  F_Correlation = F_cor_results$r,
+  F_P_Value = F_cor_results$p
+)
+result_df[result_df$P_Value<0.2,]
+result_df[result_df$M_P_Value<0.05,]
+result_df[result_df$F_P_Value<0.05,]
+library(corrplot)
+result_df[is.na(result_df)]=0
+result_df%>%
+  dplyr::select(2,4,6)%>%
+  rename(All = Correlation, Male = M_Correlation, Female = F_Correlation)%>%
+  as.matrix() ->env.cor
+result_df%>%
+  dplyr::select(3,5,7)%>%
+  as.matrix() ->env.p
+corrplot(corr =env.cor, is.corr = T, cl.ratio=2)
+
+normalize_clinical_indicator%>%
+  dplyr::select(-1,-2,-3)%>%
+  apply(.,1,sum,na.rm=TRUE) ->fi
+cor.test(normalize_clinical_indicator$age,fi)
+normalize_clinical_indicator$FI = fi
+ggplot(normalize_clinical_indicator, aes(x = age, y = FI))+
+  geom_point()+
+  geom_smooth(method = 'lm', se = F)+
+  theme_bw()+
+  annotate("text", x = 55, y = 10, label = "R = 0.127, p = 0.072",
+           color="black",size = 5, angle=0, fontface="bold")
+
+## 无归一化写入文件，后面分析有地方需要无归一化的结果
+f_final%>%
+  mutate(
+    "heart_rate" = `血压脉搏\r\n次/分`,
+    "Blood pressure-systolic" = `血压收缩压\r\nmmHg\r\n正常(90-140)`,
+    "Blood pressure-diastolic" = `血压舒张压\r\nmmHg\r\n正常(60-89)`,
+    "postprandial blood glucose" = `餐后两小时血糖\r\nmmol/L\r\n正常(3.9-7.8)`,
+    "BMI" = `体重指数\r\n正常（18.5-23.9）`,
+    "Total cholesterol" = `总胆固醇\r\nmmol/L\r\n正常（0-5.2）`,
+    "Triglycerides" = `甘油三脂\r\nmmol/L\r\n正常（<1.7）`,
+    "LDL-C" = `低密度脂蛋白\r\nmmol/L\r\n正常（0-3.33）`,
+    "HDL-C" = `高密度脂蛋白\r\nmmol/L\r\n正常（0.8-2.1）`,
+    "TG/HDL" = `甘油三脂\r\nmmol/L\r\n正常（<1.7）`/`高密度脂蛋白\r\nmmol/L\r\n正常（0.8-2.1）`,
+    "BUN" = `尿素氮（尿素）\r\nmmol/L\r\n正常（2.6-9.5）`,
+    "Creatinine" = `肌酐\r\numol/L\r\n正常（41-73）`,
+    "Uric acid" =  `尿酸\r\numol/L\r\n正常（135-425）`,
+    "Fasting Glucose" =  `空腹血糖\r\nmmol/L\r\n正常(3.6-6.1)`,
+    "ALT" =  `谷丙转氨酶\r\nU/L\r\n正常(0-50)`,
+    "AST" =  `谷草转氨酶\r\nU/L\r\n正常(0-40)`,
+    "Total Bilirubin" =  `总胆红素\r\n正常(2-21)`,
+    "Direct Bilirubin" =  `直接胆红素\r\numol/L\r\n正常（0-6.8）`,
+    "Indirect Bilirubin" =  `间接胆红素\r\numol/L\r\n正常（0-17）`,
+    "Total Protein" =  `总蛋白\r\ng/L\r\n正常（65-85）`,
+    "Albumin" =  `白蛋白\r\ng/L\r\n正常（40-55）`,
+    "Globulin" =  `球蛋白\r\ng/L\r\n正常（20-40）`,
+    "A/G" =  `白球比\r\n正常（1.2-2.4）`,
+    "ALP" =  `碱性磷酸酶\r\nU/L\r\n正常(35-135)`,
+    "GGT" =  `r-谷氨酰转移酶\r\nU/L\r\n正常(7-60)`,
+    "Leukocyte" =  `白细胞\r\n10^9/L\r\n正常（3.5-9.5）`,
+    "RBCs" =  `红细胞\r\n10^12/L\r\n正常（3.8-5.8）`,
+    "Hemoglobin" =  `血红蛋白\r\ng/L\r\n正常（115-175）`,
+    "Platelets" =  `血小板\r\n10^9/L\r\n正常（125-350）`,
+    "Hct" =  `红细胞压积\r\n%\r\n正常（35-50）`,
+    "MCV" =  `红细胞平均体积\r\nfL\r\n正常（82-100）`,
+    "PCT" =  `血小板压积\r\n%\r\n正常（0.15-0.32）`,
+    "PDW" =  as.numeric(`血小板分布宽度\r\nfL\r\n正常（9-17）`),
+    "RDW_CV" =  `RDW-CV`,
+    "RDW" =  `红细胞分布宽度\r\nfL\r\n正常（37-50）`,
+    "MPV" =  as.numeric(`平均血小板体积\r\nfL\r\n正常（9-13）`),
+    "Neutrophil" =  `中性粒细胞数\r\n10^9/L\r\n正常（1.8-6.3）`,
+    "Lymphocytes" =  `淋巴细胞数\r\n10^9/L\r\n正常（1.1-3.2）`,
+    "Eosinophil" =  `嗜酸性粒细胞\r\n10^9/L\r\n正常（0.02-0.52）`,
+    "Basophil" =  `嗜碱性粒细胞\r\n10^9/L\r\n正常（0-0.06）`
+  )%>%
+  dplyr::select(name,sex, age,heart_rate:Basophil)%>%
+  readr::write_excel_csv(., "/home/shimw/project/200Human/体检报告/000.clinical_indicator.csv")
+
+
+```
+
+### 统计糖尿病前期
+
+```{r}
+q1 = readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")
+q2 = readxl::read_xlsx("/home/shimw/project/200Human/问卷/健康状况调查问卷_数据详情表_原始数据_202310292003.xlsx")%>% # 去重保留最后一次记录
+  group_by(`Q1_您的姓名`)  %>% slice( n() ) %>% tibble()
+q3 = readxl::read_xlsx(q3_file)
+q3[q3$姓名%in%q1$name,7]
+q3[q3$姓名%in%q1$name,18]
+#文章中关于糖尿病和糖尿病前期的划分是通过HbA1C（diabetic ≥ 6.5% > prediabetic ≥ 5.7%）
+# 和fasting glucose (diabetic ≥ 7 mmol/L > prediabetic ≥ 5.6 mmol/L)
+# 2h血糖 diabetic >=11 prediabetic >=7.8
+safa = case_when(as.numeric(unlist(q3[q3$姓名%in%q1$name,7]))>=11|q3[q3$姓名%in%q1$name,18]>=7 ~ "diabetic",
+                 as.numeric(unlist(q3[q3$姓名%in%q1$name,7]))>=7.8|q3[q3$姓名%in%q1$name,18]>=5.6 ~ "prediabetic",
+         TRUE ~ "normal")
+safa
+
+## 女性年龄分布
+table(q1$sex)
+ggplot(q1[q1$sex=="女", ], aes(age))+
+  geom_histogram(color = "black",fill= "#a3cd5b",binwidth = 1)+
+  ylab("人数")+xlab("年龄")+
+  theme_bw()
+table(q1[q1$sex=="女", ]$age)
+```
+
+### 食物问卷
+
+```{r}
+## 统计黑米人数
+food = readxl::read_xlsx("/home/shimw/project/200Human/问卷/食物频率调查问卷_数据详情表_原始数据_202311271836.xlsx")
+food = food%>%dplyr::filter(`Q1_您的姓名`%in%q1$name)%>%
+  group_by(`Q1_您的姓名`)  %>% slice( n() ) %>% tibble()
+
+q1[!q1$name%in%food$Q1_您的姓名,]$name
+table(food$Q177_您是否正在吃黑米)
+food[food$Q177_您是否正在吃黑米=="是",]$Q1_您的姓名
+table(q1$sex)
+q1%>%
+  dplyr::filter(sex=="女")%>%
+  dplyr::filter(name%in%food[food$Q177_您是否正在吃黑米=="是",]$Q1_您的姓名)%>%
+  dplyr::select(age)%>%table()
+
+
+table(food$Q178_是否愿意接受黑米干预)
+food[food$Q178_是否愿意接受黑米干预=="否",]$Q1_您的姓名
+```
+
+### 统计三高
+
+```{r}
+q3 = readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检报告20231127.xlsx")%>%
+  dplyr::filter(`姓名`%in%q1$name)
+
+q3$`餐后两小时血糖\r\nmmol/L\r\n正常(3.9-7.8)`
+q3$`空腹血糖\r\nmmol/L\r\n正常(3.6-6.1)`
+q3$`总胆固醇\r\nmmol/L\r\n正常（0-5.2）`
+q3$`低密度脂蛋白\r\nmmol/L\r\n正常（0-3.33）`
+q3$`高密度脂蛋白\r\nmmol/L\r\n正常（0.8-2.1）`
+q3$`血压收缩压\r\nmmHg\r\n正常(90-140)`
+q3$`血压舒张压\r\nmmHg\r\n正常(60-89)`
+
+
+table(q3$`餐后两小时血糖\r\nmmol/L\r\n正常(3.9-7.8)`<3.9)
+table(q3$`空腹血糖\r\nmmol/L\r\n正常(3.6-6.1)`<3.6)
+table(q3$`高密度脂蛋白\r\nmmol/L\r\n正常（0.8-2.1）`>2.1)
+table(q3$`低密度脂蛋白\r\nmmol/L\r\n正常（0-3.33）`<3.33)
+table(q3$`血压收缩压\r\nmmHg\r\n正常(90-140)`<90)
+table(q3$`血压收缩压\r\nmmHg\r\n正常(90-140)`>=140)
+table(q3$`血压舒张压\r\nmmHg\r\n正常(60-89)`<60)
+table(q3$`血压舒张压\r\nmmHg\r\n正常(60-89)`>=90)
+
+subject_desease = q3[,c("姓名","年龄","性别", "餐后两小时血糖\r\nmmol/L\r\n正常(3.9-7.8)",
+                        "空腹血糖\r\nmmol/L\r\n正常(3.6-6.1)","总胆固醇\r\nmmol/L\r\n正常（0-5.2）", "高密度脂蛋白\r\nmmol/L\r\n正常（0.8-2.1）",
+                        "低密度脂蛋白\r\nmmol/L\r\n正常（0-3.33）", "血压收缩压\r\nmmHg\r\n正常(90-140)",
+                        "血压舒张压\r\nmmHg\r\n正常(60-89)"
+                        )]%>%
+  mutate("glucose" = if_else(`餐后两小时血糖\r\nmmol/L\r\n正常(3.9-7.8)`>7.8|`空腹血糖\r\nmmol/L\r\n正常(3.6-6.1)`>6.1, "高血糖","无"))%>%
+  mutate("胆固醇" = if_else(`总胆固醇\r\nmmol/L\r\n正常（0-5.2）`>5.2, "高胆固醇","无"))%>%
+  mutate("低密度脂蛋" = if_else(`低密度脂蛋白\r\nmmol/L\r\n正常（0-3.33）`>3.33, "高低密度脂蛋","无"))%>%
+  mutate("血压" = if_else(`血压收缩压\r\nmmHg\r\n正常(90-140)`>140|`血压舒张压\r\nmmHg\r\n正常(60-89)`>89, "高血压","无"))
+
+kkk = subject_desease%>%dplyr::filter(glucose=="高血糖"|`胆固醇`=="高胆固醇"|"低密度脂蛋"=="高低密度脂蛋"|`血压`=="高血压")
+readr::write_excel_csv(kkk, "/home/shimw/project/200Human/问卷/三高统计.csv")
+```
+
+### 统计CSDD分数（抑郁）
+
+```{r}
+readr::read_csv("/home/shimw/project/200Human/result/000.questionnaire.summary.csv")%>%
+  dplyr::select(name, sex, age,CSDD)%>%
+  mutate("status" = case_when(
+    CSDD >15 ~ "重度抑郁",
+    CSDD >10 ~ "中度抑郁",
+    CSDD >5 ~ "轻度抑郁",
+    T ~ "正常"
+  ))%>%
+  readr::write_excel_csv("/home/shimw/project/200Human/result/000.questionnaire.CSDD.csv")
+```
+
+### SF疾病状况问卷
+
+```{r}
+disease_status <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/疾病情况调查问卷_数据详情表_编码数据_202403191731.xlsx")
+### 计算SF分数
+# https://www.doctor-network.com/Public/LittleTools/363.html
+# 疼痛部分的问题少了，浙大的打分不对，我将分数进行了一定的对应
+SF_summary <- disease_status%>%
+  mutate(PF = (rowSums(across(Q35:Q44), na.rm=TRUE)-10)/20)%>%
+  mutate(RP = (rowSums(across(Q45:Q48), na.rm=TRUE)-4)/4)%>%
+  mutate(Q53_c = case_when(
+    Q53 ==1 ~ 6,
+    Q53 ==2 ~ 5.4,
+    Q53 ==3 ~ 4.2,
+    Q53 ==4 ~ 3.1,
+    Q53 ==5 ~ 1
+  ))%>%
+  mutate(Q54_c = case_when(
+    Q53==1&Q54==1 ~ 6,
+    Q53==1&Q54==2 ~ 4.75,
+    Q53==1&Q54==3 ~ 3.5,
+    Q53==1&Q54==4 ~ 2.25,
+    Q53==1&Q54==5 ~ 1,
+    Q53!=1&Q54==1 ~ 5,
+    Q53!=1&Q54==2 ~ 4,
+    Q53!=1&Q54==3 ~ 3,
+    Q53!=1&Q54==4 ~ 2,
+    Q53!=1&Q54==5 ~ 1,
+  ))%>%
+  mutate(BP = (rowSums(across(c(Q53_c,Q54_c)), na.rm=TRUE)-2)/10)%>%
+  mutate(GH = ((20-rowSums(across(c(Q33,Q34,Q66,Q68)), na.rm=TRUE))+(rowSums(across(c(Q65,Q67)), na.rm=TRUE))-5)/20
+         )%>%
+  mutate(VT = ((12-rowSums(across(c(Q55,Q59)), na.rm=TRUE))+(rowSums(across(c(Q61,Q63)), na.rm=TRUE))-4)/20
+  )%>%
+  mutate(SF = ((5-rowSums(across(c(Q52)), na.rm=TRUE))+(rowSums(across(c(Q64)), na.rm=TRUE))-2)/8
+  )%>%
+  mutate(RE = (rowSums(across(c(Q49,Q50,Q51)), na.rm=TRUE)-3)/3)%>%
+  mutate(MH = ((12-rowSums(across(c(Q58,Q62)), na.rm=TRUE))+(rowSums(across(c(Q56,Q57,Q60)), na.rm=TRUE))-5)/25
+  )%>%
+  select(Q1,PF,RP,BP,GH,VT,SF,RE,MH)%>%
+  mutate(PCS = (PF+RP+BP+GH)/4, MCS = (VT+SF+RE+MH)/4)%>%distinct()
+
+readr::write_excel_csv(SF_summary, "/home/shimw/project/200Human/result/000.questionnaire.SF36.csv")
+SF_summary <- readr::read_csv("/home/shimw/project/200Human/result/000.questionnaire.SF36.csv")%>%
+  rename(name = Q1)
+## 问卷与临床值的相关性
+data = readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")
+res <- readr::read_csv("/home/shimw/project/200Human/体检报告/all_clinical.csv")
+FI_lab <- res%>%
+  dplyr::mutate(score = if_else(res=="normal", 1, 0))%>%
+  group_by(name,sex)%>%
+  summarise(FI = sum(score))%>%
+  dplyr::mutate(FI = if_else(sex=="女", FI/120, FI/119))
+FI_lab = readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  dplyr::select(name, age)%>%
+  left_join(FI_lab, .)
+FI_SF_summary <- left_join(SF_summary, FI_lab)
+cor.test(FI_SF_summary$PCS, FI_SF_summary$age)
+cor.test(FI_SF_summary$MCS, FI_SF_summary$age)
+
+ggplot(FI_SF_summary, aes(x = age, y = PCS))+
+  geom_point(col="#546de5",fill="#546de5", shape=16,alpha=0.6)+
+  geom_smooth(method = 'lm', se = F, color = "black",  linewidth = 0.7)+
+  theme_bw() +
+  annotate("text", x = 60, y = 1, label = "R = 0.024, P = 0.799",
+           color="black",size = 5, angle=0)+
+  theme(panel.border = element_rect(fill=NA,color="black", 
+                                    size=1.1, linetype="solid")) +
+  theme(plot.title = element_text(size=18,hjust = 0.5),
+        axis.text.x = element_text(size = 16 , color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.text.y = element_text(size = 16, color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.title.x=element_text(size=17,angle = 0),
+        axis.title.y=element_text(size=17,angle = 90),
+        plot.margin = ggplot2::margin(0.2, 0.8, 0.4, 0.4, "cm"),
+        axis.ticks.length = unit(-0.1,"cm"),
+        panel.grid = element_blank() # 删除网格线
+  )+
+  labs(title = "PCS",x = '年龄', y = 'PCS')
+
+library(showtext) 
+showtext_auto(enable = TRUE) 
+ggsave("/home/shimw/project/200Human/result/000.questionnaire.SF36_PCS_age.pdf", width = 4.8, height = 4.3)
+
+ggplot(FI_SF_summary, aes(x = age, y = MCS))+
+  geom_point(col="#546de5",fill="#546de5", shape=16,alpha=0.6)+
+  geom_smooth(method = 'lm', se = F, color = "black",  linewidth = 0.7)+
+  theme_bw() +
+  annotate("text", x = 60, y = 1, label = "R = 0.238, P = 0.01",
+           color="black",size = 5, angle=0)+
+  theme(panel.border = element_rect(fill=NA,color="black", 
+                                    size=1.1, linetype="solid")) +
+  theme(plot.title = element_text(size=18,hjust = 0.5),
+        axis.text.x = element_text(size = 16 , color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.text.y = element_text(size = 16, color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.title.x=element_text(size=17,angle = 0),
+        axis.title.y=element_text(size=17,angle = 90),
+        plot.margin = ggplot2::margin(0.2, 0.8, 0.4, 0.4, "cm"),
+        axis.ticks.length = unit(-0.1,"cm"),
+        panel.grid = element_blank() # 删除网格线
+  )+
+  labs(title = "MCS",x = '年龄', y = 'MCS')
+
+library(showtext) 
+showtext_auto (enable = TRUE) 
+ggsave("/home/shimw/project/200Human/result/000.questionnaire.SF36_MCS_age.pdf", width = 4.8, height = 4.3)
+
+
+clinical_SF_summary <- left_join(SF_summary, data)%>%
+  select(name, where(is.numeric))
+library(psych)
+cor.result <- corr.test(clinical_SF_summary[,c("PCS", "MCS")],
+                        clinical_SF_summary[,-c(1:12)],method = "spearman", adjust = "BH") 
+
+cor.result$p.adj
+cor.result.p <- reshape2::melt(cor.result$p, value.name = "pvalue")
+cor.result.r <- reshape2::melt(cor.result$r, value.name = "rho")
+
+cor.result_PCS <- left_join(cor.result.p,cor.result.r)%>%
+  filter(Var1=="PCS")
+
+library(ggrepel)
+ggplot(cor.result_PCS, aes(x = rho, y = -log10(pvalue))) +
+  geom_point(aes(color = pvalue < 0.05), alpha = 0.5) + # 根据 p 值是否小于 0.05 来设置点的颜色
+  geom_vline(xintercept = 0, linetype = "dashed") + 
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") + # 添加 p 值小于 0.05 的虚线
+  labs(x = "rho", y = "-log10(p value)") + # 添加标签
+  theme_minimal() + # 使用最小主题
+  scale_color_manual(values = c("grey", "red"), guide = FALSE) + # 设置颜色
+  geom_text_repel(data = subset(cor.result_PCS, pvalue < 0.05), aes(label = Var2), 
+                  color = "red", size = 3, show.legend = FALSE) + # 标记 p 值低于 0.05 的代谢物名称
+  labs(title = "PCS")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+cor.result_MCS <- left_join(cor.result.p,cor.result.r)%>%
+  filter(Var1=="MCS")
+ggplot(cor.result_MCS, aes(x = rho, y = -log10(pvalue))) +
+  geom_point(aes(color = pvalue < 0.05), alpha = 0.5) + # 根据 p 值是否小于 0.05 来设置点的颜色
+  geom_vline(xintercept = 0, linetype = "dashed") + 
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") + # 添加 p 值小于 0.05 的虚线
+  labs(x = "rho", y = "-log10(p value)") + # 添加标签
+  theme_minimal() + # 使用最小主题
+  scale_color_manual(values = c("grey", "red"), guide = FALSE) + # 设置颜色
+  geom_text_repel(data = subset(cor.result_MCS, pvalue < 0.05), aes(label = Var2), 
+                  color = "red", size = 3, show.legend = FALSE) + # 标记 p 值低于 0.05 的代谢物名称
+  labs(title = "MCS")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### 计算PSQI睡眠问卷
+
+```{r}
+library(hms)
+PSQI = disease_status%>%
+  mutate(Q70 = case_when(
+    Q70<=15 ~ 0,
+    Q70<=30 ~ 1,
+    Q70<=60 ~ 2,
+    T ~ 3
+  ))%>%
+  mutate(Q69 = parse_hm(paste(`Q69|1|open`, `Q69|2|open`, sep = ":")))%>%
+  mutate(Q71 = parse_hm(paste(`Q71|1|open`, `Q71|2|open`, sep = ":")) +dhours(24))%>%
+  mutate(Q69 = if_else(Q69>parse_hm("6:00")&Q69<parse_hm("16:00"), Q69+dhours(12), Q69))%>%
+  mutate(Q69 = if_else(Q69>=parse_hm("0:00")&Q69<parse_hm("3:00"), Q69+dhours(24), Q69))%>%
+  mutate(sleep_rate = as.numeric(Q72)*3600/as.numeric(Q71-Q69))%>%
+  mutate(sleep_rate = case_when(
+    sleep_rate>=0.85 ~ 0,
+    sleep_rate<0.85&sleep_rate>=0.75 ~ 1,
+    sleep_rate<0.75&sleep_rate>=0.65 ~ 1,
+    sleep_rate<0.65 ~ 3
+  ))%>%
+  mutate(PSQI = rowSums(across(Q73:Q85), na.rm=TRUE) - 13 + sleep_rate + Q70)%>%  # 13个问题，全部需要-1
+  select(Q1,PSQI)%>%
+  mutate("睡眠质量" = case_when(
+    PSQI<=5 ~ "睡眠质量很好",
+    PSQI>5&PSQI<=10 ~ "睡眠质量还行",
+    PSQI>10&PSQI<=15 ~ "睡眠质量一般",
+    PSQI>15 ~ "睡眠质量很差",
+  ))%>%distinct()
+
+readr::write_excel_csv(PSQI, "/home/shimw/project/200Human/result/000.questionnaire.PSQI.csv")
+```
+
+## 临床体检结果 000.tijian.R
+
+整理了临床体检代码，更多的代码储存在`/opt/shimw/github/200Human/000.tijian.R`
+
+```{r}
+library(dplyr)
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) # 加入年龄
+
+meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(ID="编号", name="姓名", sex="性别")%>%
+  dplyr::left_join(q1) # 合并年龄
+
+# 金域的结果整理在了songxm的000tijian.R中
+data1 <- readxl::read_excel("/home/shimw/project/200Human/体检报告/迈维代谢.xlsx")%>%
+  dplyr::select(-`正常范围`)%>%
+  na.omit()%>%
+  tibble::column_to_rownames(.,"检测项目")%>%
+  t()%>%as.data.frame()%>%
+  tibble::rownames_to_column("name")
+
+data2 <- readxl::read_xlsx("/home/shimw/project/200Human/体检报告/诺敏检测结果-整理.xlsx", sheet = 3)%>%
+  dplyr::select(-c(1,3,4))%>%
+  dplyr::rename(name = "姓名")%>%
+  left_join(data1)
+
+data3 <- readxl::read_excel("/home/songxm/project/200Human/20231219.xlsx")%>%
+  # tidyr::drop_na(`李梦境`)%>% # 注意，这里过滤的时候把男女特有的特征删掉了，比如孕酮
+  tibble::column_to_rownames(.,"项目")%>%
+  t()%>%as.data.frame()%>%
+  tibble::rownames_to_column("name")%>%
+  left_join(data2)%>%
+  mutate("血糖"=as.numeric(`血糖`), "空腹胰岛素(ins)"=as.numeric(`空腹胰岛素(ins)`))%>%
+  mutate("HOMA-IR"= `血糖`*`空腹胰岛素(ins)`/22.5)
+
+data4 <- readr::read_csv("/home/shimw/project/200Human/体检报告/000.clinical_indicator.csv")%>%
+  left_join(., meta_data[,1:2])
+data5 <- left_join(data3, data4)
+
+w_h_data = readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  mutate("腰臀比" = as.numeric(waistline)/as.numeric(hips),
+         "FEV/FVC" = as.numeric(FEV)/as.numeric(FVC))%>%
+  select(name, "腰臀比", "FEV/FVC", "FEV", "FVC")
+
+data <- left_join(data5, w_h_data)%>%
+  dplyr::mutate("中性粒细胞在白细胞中的百分比" = (Neutrophil/Leukocyte)*100,
+                "Free T3 to reverse T3 ratio" = as.numeric(`游离三碘甲状腺原氨酸(FT3)`)/as.numeric(`反三碘甲状腺原氨酸(rT3)`),
+                "Cu/Zn" = as.numeric(`全血铜(Cu)`)/as.numeric(`全血锌(Zn)`)/100,
+                "脉压(Pulse pressure)" = as.numeric(`Blood pressure-systolic`)-as.numeric(`Blood pressure-diastolic`),
+                "平均动脉压(Mean arterial pressure)" = (as.numeric(`Blood pressure-systolic`) + 2*as.numeric(`Blood pressure-diastolic`))/3
+                )
+```
+
+### 临床指标范围
+
+```{r}
+glucose_range = list(
+  "空腹胰岛素(ins)" = c(1.8, 11.8), 
+  "血糖" = c(3.60, 6.10), 
+  "postprandial blood glucose" = c(3.9, 7.8),
+  "糖化血红蛋白(HBA1c)" = c(4.0, 6.0),
+  "HOMA-IR" = c(0, 1.4)
+)
+
+lipids_range = list(
+  "BMI" = c(18.5,23.9),
+  "腰臀比" = list("男" = c(0, 0.9),"女" = c(0, 0.85)),
+  "小而密低密度脂蛋白胆固醇(sd LDL-C)" = list(
+    "男" = list("年轻"=c(0.246, 1.393), "老年"=c(0.264, 1.362)),
+    "女" = list("年轻"=c(0.243, 1.109), "老年"=c(0.264, 1.362))
+  ),
+  "Total cholesterol" = c(0,5.2),
+  "HDL-C"=c(0.8, 2.1),
+  "Triglycerides" = c(0, 1.7),
+  "TG/HDL" = c(0, 1),
+  "LDL-C" = c(0,3.33),
+  "载脂蛋白A1(APOA1)" = list("男" = c(1.05, 1.75),
+                         "女" = c(1.05, 2.05)),
+  "载脂蛋白B(APOB)" = list("男"=c(0.60, 1.40), "女"=c(0.55, 1.30)),
+  "Platelets" = c(125, 350)
+)
+pressure_range = list(
+  "heart_rate" = c(60, 100), 
+  "Blood pressure-systolic" = c(90, 140), 
+  "Blood pressure-diastolic" = c(60, 89),
+  "脉压(Pulse pressure)" = c(30, 65),
+  "平均动脉压(Mean arterial pressure)" = c(70, 105)
+)
+
+inflammation_range = list(
+  "人氧化型低密度脂蛋白(Ox-LDL)" = c(0, 60),
+  "超敏C-反应蛋白(hsCRP)" = c(0, 4.00),
+  "同型半胱氨酸(HCY)" = list("小于51岁" = c(0, 15),
+                       "大于50岁" = c(0, 20)),
+  "中性粒细胞在白细胞中的百分比" = c(40, 75)
+)
+immunity_range = list(
+  "补体4(C4)" = c(0.17, 0.48),
+  "人转化生长因子β1(TGF-β1)" = c(7.58, 18.70),
+  "人黑色素细胞刺激素(MSH)" = c(0.87, 2.58)
+)
+thyroid_range = list(
+  "游离三碘甲状腺原氨酸(FT3)" = c(2.43, 6.01),
+  "游离甲状腺素(FT4)" = c(9.01,19.05),
+  "超敏促甲状腺素(TSH)" = c(0.3500, 4.9400),
+  "反三碘甲状腺原氨酸(rT3)" = c(0.31, 0.95),
+  "Free T3 to reverse T3 ratio" = c(0.02, 100000)# 是大于0.02
+)
+
+kidney_range = list(
+  "BUN" = c(2.6, 9.5),
+  "Creatinine" = list(
+    "男" = list("小于60"=c(57, 97), "大于60"=c(57, 111)),
+    "女" = list("小于60"=c(41, 73), "大于60"=c(41, 81))
+  ),
+  "Uric acid" = c(135, 425)
+)
+liver_range = list(
+  "AST" = c(0, 40),
+  "ALT" = c(0, 50),
+  "乳酸脱氢酶(LDH)" = c(120, 250),
+  "Albumin" = c(40, 55),
+  "Globulin" = c(20, 40),
+  "A/G" = c(1.2, 2.4),
+  "GGT" = c(7, 60),
+  "ALP" = c(35, 135),
+  "Total Bilirubin" = c(2,21),
+  "Total Protein" = c(65, 85)
+)
+lung_range = list(
+  "FEV/FVC" = c(0.7, 1)
+)
+
+gut_range = list(
+  "抗组织谷氨酰胺转移酶抗体 IgG" = c(0.00, 20.00),
+  "抗去酰胺基麦胶蛋白抗体 IgA" = c(0, 10, 15),
+  "抗去酰胺基麦胶蛋白抗体 IgG" = c(0, 10, 15),
+  "抗SCL-70抗体" =  c(0, 20),
+  "抗核糖体P蛋白抗体,定量" = c(0, 20),
+  "抗SSA抗体(SS-A/Ro60)" = c(0, 20),
+  "抗Ro52抗体,定量"  = c(0, 20),
+  "抗SSB抗体(SS-B/La)"  = c(0, 20),
+  "抗Jo-1抗体"  = c(0, 20),
+  "抗Sm抗体"  = c(0, 20),
+  "抗U1RNP抗体"= c(0, 20),
+  "抗着丝点蛋白B抗体(CENP-B)"  = c(0, 20),
+  "抗双链DNA抗体定量" = c(0, 20),
+  "抗核抗体(ANA)总抗体" = c("阴性") # 结果为诊断结果（阴性阳性）
+)
+
+hormones_range = list(
+  "皮质醇(COR)" = c(133,537),
+  "人孕烯醇酮(PREG)" = c(2.2, 10.0),
+  "脱氢表雄酮(DHEA)" = list("男" = c(1.33, 6.48), "女" = c(1, 5.86)),
+  "雌二醇(E2)" = c(10, 649),
+  "肾素浓度(Renin)" = c(3.8,38.8),
+  "醛固酮(ALD)" = c(40.00, 310.00), # 从范围判断为立位
+  "多巴胺(DA)" = c(0,195.7),
+  "肾上腺素(E)" = c(0,769),
+  "去甲肾上腺素(NE)" = c(1182.8,10054),
+  "甲状旁腺激素(PTH)" = c(1.60, 6.90),
+  "孕酮(P)" = c(0.1, 242.50),
+  "促卵泡激素(FSH)" = c(1.38, 133.41),
+  "抗缪勒管激素(AMH)" = c(0.06,12.53),
+  "游离睾酮(FT)" = c(4.94, 32.01),
+  "睾酮(T)" = c(15,50)
+)
+anemic_range = list(
+  "Hemoglobin" = c(115, 175),
+  "Vitamin B9 叶酸" = c(4, 35),
+  "Vitamin B12" = c(0, 52.9),
+  "MCV" = c(82, 100),
+  "RDW" = c(37, 50)
+)
+Vitamin_range = list(
+  "Vitamin B6" = c(2, 25),
+  "Vitamin B1" = c(0.5, 10),
+  "Vitamin B2" = c(3, 20),
+  "Vitamin B3" = c(12, 150),
+  "Vitamin B5" = c(10, 100),
+  "Vitamin B7" = c(0.1, 2),
+  "Vitamin D" = c(20,100),
+  "Vitamin E" = c(5000, 25000),
+  "Vitamin A" = c(160, 1200),
+  "Vitamin K1" = c(0.1, 2.2)
+)
+fatty_acids_range = list(
+  "Omega-6:Omega-3" = c(1,4),
+  "Omega-3指数" = c(8, 100)
+  #"AA:EPA" = c(0,3)
+)
+element_range = list(
+  "钾(K)" = c(3.50, 5.30),
+  "钠(Na)" = c(137.0,147.0),
+  "血总钙(CA)" = c(2.11, 2.52),
+  "血磷(P)" = c(0.85, 1.81),
+  "血铁(FE)" = list("男" = c(10.7, 36.7), "女" = c(7.8, 32.2)),
+  "全血铁(Fe)" = list("男" = c(464.9, 683.2), "女" = c(394.5, 585.6)),
+  "全血钙(Ca)" = list("男" = c(46.7, 64.1), "女" = c(53.3, 68.2)),
+  "全血镁(Mg)" = list("男" = c(35.1, 50.5), "女" = c(31.5, 45.7)),
+  "全血铜(Cu)" = list("男" = c(629.6,1039.7), "女" = c(713.7,1488.2)),
+  "全血锌(Zn)" = list("男" = c(5.3, 8.6), "女" = c(4.6, 7.8)),
+  "Cu/Zn" = c(0.54, 1.68),
+  "全血硒(Se)" = c(58.4, 232.1),
+  "全血钒(V)" = c(50, 4700),
+  "全血铬(Cr)" = c(0.7, 28),
+  "全血锰(Mn)" = list("男" = c(7.3, 24.0), "女" = c(4, 21.5)),
+  "全血钴(Co)" = c(0.1, 0.7),
+  "全血镍(Ni)" = c(1, 27.9),
+  "全血铷(Rb)" = c(0.9, 3.5),
+  "全血钼(Mo)" = c(0.2, 3.8),
+  "人还原性谷胱甘肽(GSH)" = c(51.9, 68.6),
+  "辅酶Q10" = c(0.46, 1.85)
+)
+poison_range = list(
+  "全血铅(Pb)" = c(0, 400),
+  "全血镉(Cd)" = c(0, 5),
+  "全血微量元素汞" = c(0, 5),
+  "全血砷(As)" = c(0.13, 8.54),
+  "抗甲状腺球蛋白抗体(TGAb)" = c(0.00, 75.00),
+  "抗甲状腺过氧化物酶抗体(TPOAb)" = c(0.0, 30.0),
+  "霉菌毒素(mycotoxins)" = c("阴性"),
+  "草甘膦(Glyphosate)" = c("阴性")
+)
+
+s_feature = c(
+  "腰臀比",
+  "载脂蛋白A1(APOA1)","载脂蛋白B(APOB)", 
+  "血铁(FE)", 
+  "全血铁(Fe)", "全血钙(Ca)", "全血镁(Mg)", 
+  "全血铜(Cu)",  "全血锌(Zn)", "全血锰(Mn)",
+  "脱氢表雄酮(DHEA)")
+
+
+all_range = c(glucose_range, lipids_range, pressure_range, inflammation_range, immunity_range,
+              thyroid_range, kidney_range, liver_range, lung_range, gut_range, hormones_range,
+              anemic_range, Vitamin_range, fatty_acids_range, element_range, poison_range)
+# readr::write_excel_csv(data[, c("name", "sex", "age",names(all_range))], "/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")
+```
+
+### 筛选临床指标异常
+
+```{r}
+data = readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")
+filter_outlier <- function(.x){
+  tmp = unlist(data[,.x])
+  
+  if(.x=="霉菌毒素(mycotoxins)"|.x=="草甘膦(Glyphosate)"|.x=="抗核抗体(ANA)总抗体"){
+    res = case_when(tmp=="阴性" ~ "normal",
+                    TRUE ~ "higher")
+    df = tibble::tibble("name" = data$name, "sex" = data$sex, "age" = data$age,
+                        "feature" = .x, "res" = res, "value" = tmp) 
+    return(df)
+  }
+  
+  .tmp = as.numeric(gsub("<|>", "", tmp))
+  if(.x%in%s_feature){
+    res = case_when(data$sex=="男"&.tmp>=all_range[[.x]][["男"]][1]&.tmp<=all_range[[.x]][["男"]][2] ~ "normal",
+                    data$sex=="女"&.tmp>=all_range[[.x]][["女"]][1]&.tmp<=all_range[[.x]][["女"]][2] ~ "normal",
+                    data$sex=="男"&.tmp>all_range[[.x]][["男"]][2] ~ "higher",
+                    data$sex=="女"&.tmp>all_range[[.x]][["女"]][2] ~ "higher",
+                    TRUE ~ "lower")
+    df = tibble::tibble("name" = data$name, "sex" = data$sex, "age" = data$age,
+                        "feature" = .x, "res" = res, "value" = as.character(tmp)) 
+    return(df)
+  }
+  if(.x=="小而密低密度脂蛋白胆固醇(sd LDL-C)"){
+    res = case_when(data$sex=="男"&data$age<=44&.tmp>=0.246&.tmp<=1.393 ~ "normal",
+                    data$sex=="女"&data$age<=54&.tmp>=0.243&.tmp<=1.109 ~ "normal",
+                    data$sex=="男"&data$age>44&.tmp>=0.264&.tmp<=1.362 ~ "normal",
+                    data$sex=="女"&data$age>54&.tmp>=0.264&.tmp<=1.362 ~ "normal",
+                    data$sex=="男"&data$age<=44&.tmp>1.393 ~ "higher",
+                    data$sex=="女"&data$age<=54&.tmp>1.109 ~ "higher",
+                    data$sex=="男"&data$age>44&.tmp>1.362 ~ "higher",
+                    data$sex=="女"&data$age>54&.tmp>1.362 ~ "higher",
+                    TRUE ~ "lower")
+    df = tibble::tibble("name" = data$name, "sex" = data$sex, "age" = data$age,
+                        "feature" = .x, "res" = res, "value" = as.character(tmp)) 
+    return(df)
+  }
+  if(.x=="同型半胱氨酸(HCY)"){
+    res = case_when(data$age<=50&.tmp<=15 ~ "normal",
+                    data$age>50&.tmp<=20 ~ "normal",
+                    data$age<=50&.tmp>15 ~ "higher",
+                    data$age>50&.tmp>20 ~ "higher"
+    )
+    df = tibble::tibble("name" = data$name, "sex" = data$sex, "age" = data$age,
+                        "feature" = .x, "res" = res, "value" = as.character(tmp)) 
+    return(df)
+  }
+  if(.x=="Creatinine"){
+    res = case_when(data$sex=="男"&data$age<=59&.tmp<57 ~ "lower",
+                    data$sex=="男"&data$age<=59&.tmp>97 ~ "higher",
+                    data$sex=="男"&data$age>59&.tmp<57 ~ "lower",
+                    data$sex=="男"&data$age>59&.tmp>111 ~ "higher",
+                    data$sex=="女"&data$age<=59&.tmp<41 ~ "lower",
+                    data$sex=="女"&data$age<=59&.tmp>73 ~ "higher",
+                    data$sex=="女"&data$age>59&.tmp<41 ~ "lower",
+                    data$sex=="女"&data$age>59&.tmp>81 ~ "higher",
+                    TRUE ~ "normal"
+    )
+    df = tibble::tibble("name" = data$name, "sex" = data$sex, "age" = data$age,
+                        "feature" = .x, "res" = res, "value" = as.character(tmp)) 
+    return(df)
+  }
+  
+  res = case_when(is.na(.tmp) ~ "NA",
+                  .tmp>=all_range[[.x]][1]&.tmp<=all_range[[.x]][2] ~ "normal",
+                  .tmp>all_range[[.x]][2] ~ "higher",
+                  TRUE ~ "lower")
+  df = tibble::tibble("name" = data$name, "sex" = data$sex, "age" = data$age,
+                      "feature" = .x, "res" = res, "value" = as.character(tmp))%>%
+    tidyr::drop_na()
+  return(df)
+}
+res = purrr::map(names(all_range), filter_outlier)%>%
+  dplyr::bind_rows()
+readr::write_excel_csv(res, "/home/shimw/project/200Human/体检报告/all_clinical.csv")
+
+res%>%
+  dplyr::filter(res!="normal")%>%
+readr::write_excel_csv(., "/home/shimw/project/200Human/体检报告/指标异常.csv")
+res%>%
+  dplyr::filter(feature=="小而密低密度脂蛋白胆固醇(sd LDL-C)")%>%
+  readr::write_excel_csv(., "/home/shimw/project/200Human/体检报告/小而密低密度脂蛋白胆固醇.csv")
+```
+
+### 分指标类型统计
+
+```{r}
+res = readr::read_csv("/home/shimw/project/200Human/体检报告/all_clinical.csv")
+prop_feature <- res %>%
+  group_by(feature, res) %>%
+  summarise(N=n()) %>%
+  group_by(feature) %>%
+  mutate(prop = (N/sum(N)), Cumsum = cumsum(prop))%>%
+  mutate(res = factor(res, levels = c("higher", "normal","lower")))
+
+library(ggplot2)
+library("ggsci")
+library(showtext) 
+showtext_auto (enable = TRUE) 
+
+glucose_range # 糖毒性和胰岛素抵抗的检测标志（糖尿病）
+lipids_range # 脂质代谢（心脑血管相关的疾病）
+pressure_range # 血压心率（高血压和心脏健康状况）
+inflammation_range # 炎症相关
+immunity_range # 炎症引起的先天性免疫激活
+thyroid_range # 甲状腺功能
+kidney_range # 肾功能
+liver_range # 肝损伤和肝功能
+lung_range # 肺活量（慢性阻塞性肺疾病（COPD）和哮喘）
+gut_range # 麸质敏感性肠病或者乳糜泻  自身免疫性疾病（抗可提取性核抗原多肽抗体8项+3=11）
+hormones_range # 激素类
+anemic_range # 贫血
+Vitamin_range # 维生素
+fatty_acids_range # 红细胞脂肪酸
+element_range # 元素
+poison_range # 环境毒素
+all_range = c(glucose_range, lipids_range, pressure_range, inflammation_range, immunity_range,
+              thyroid_range, kidney_range, liver_range, lung_range, gut_range, hormones_range,
+              anemic_range, Vitamin_range, fatty_acids_range, element_range, poison_range)
+kk = tibble("feature" = names(all_range),
+            "class" = c(rep("血糖", length(glucose_range)),
+                        rep("血脂", length(lipids_range)),
+                        rep("血压", length(pressure_range)),
+                        rep("炎症反应", length(inflammation_range)),
+                        rep("免疫激活相关", length(immunity_range)),
+                        rep("甲状腺功能", length(thyroid_range)),
+                        rep("肾功能", length(kidney_range)),
+                        rep("肝损伤和肝功能", length(liver_range)),
+                        rep("肺活量", length(lung_range)),
+                        rep("肠病", length(gut_range)),
+                        rep("激素类", length(hormones_range)),
+                        rep("贫血", length(anemic_range)),
+                        rep("维生素", length(Vitamin_range)),
+                        rep("红细胞脂肪酸", length(fatty_acids_range)),
+                        rep("微量元素", length(element_range)),
+                        rep("环境毒素", length(poison_range)))
+            )
+res <- readr::read_csv("/home/shimw/project/200Human/体检报告/all_clinical.csv")
+
+
+type_info <- data_frame("feature" = unique(res$feature),# 顺序和表里是一致的
+                        "type" = c(rep("病理类", 60), 
+                                   rep("激素类", 15), 
+                                   rep("营养类", 39),
+                                   rep("环境毒素", 8))
+)%>%
+  left_join(kk)
+# readr::write_excel_csv(type_info, "/home/shimw/project/200Human/体检报告/clinical_type.csv")
+
+plot_prop <- function(.x){
+  p1 = prop_feature%>%
+    filter(feature%in%.x)%>%
+    mutate(feature = factor(feature, levels = rev(.x)))%>%
+    ggplot(data=.,
+           aes(feature,prop,fill=res))+
+    scale_fill_npg()+
+    geom_bar(stat="identity",position="stack", color="black", width=0.7,linewidth=0.25)+
+    labs(x = "",y = "Prop")+theme_classic()+coord_flip()+labs(fill = "体检结果")+
+    theme(
+      axis.title.x = element_blank(),
+      axis.text.x = element_text(size = 11),
+      axis.text.y = element_text(size = 12),
+      legend.text = element_text(size=11)
+    )
+  return(p1)
+}
+
+
+p1 = plot_prop(names(c(glucose_range,lipids_range, pressure_range)))
+ggsave("/home/shimw/project/200Human/体检报告/000.1病理.pdf", p1, width=6.2,height=5.3)
+p2 = plot_prop(names(c(inflammation_range,immunity_range, thyroid_range, kidney_range,liver_range)))
+ggsave("/home/shimw/project/200Human/体检报告/000.2病理.pdf", p2, width=5.8,height=6.2)
+p3 = plot_prop(names(c(lung_range, gut_range)))
+ggsave("/home/shimw/project/200Human/体检报告/000.3病理.pdf", p3, width=5.8,height=3.6)
+
+p4 = plot_prop(names(c(hormones_range)))
+ggsave("/home/shimw/project/200Human/体检报告/000.4激素.pdf", p4, width=4.9,height=3.8)
+
+p5 = plot_prop(names(c(anemic_range,Vitamin_range, fatty_acids_range)))
+ggsave("/home/shimw/project/200Human/体检报告/000.5营养.pdf", p5, width=4.9,height=4.6)
+
+p6 = plot_prop(names(element_range))
+ggsave("/home/shimw/project/200Human/体检报告/000.6营养.pdf", p6, width=5.2,height=5.3)
+
+p7 = plot_prop(names(poison_range))
+ggsave("/home/shimw/project/200Human/体检报告/000.7毒素.pdf", p7, width=5.9,height=2.2)
+
+```
+
+### 胰岛素抵抗与血脂关联
+
+```{r}
+library(ggplot2)
+library("ggsci")
+
+gloose <- readr::read_csv("/home/songxm/project/200Human/HOMA-IR.csv")
+
+gloose_TG <- left_join(gloose, data)
+
+summary(aov(BMI~`胰岛素抵抗风险`, data=gloose_TG))
+# summary(aov(`Total cholesterol`~`胰岛素抵抗风险`, data=gloose_TG))
+summary(aov(`HDL-C`~`胰岛素抵抗风险`, data=gloose_TG))
+summary(aov(`LDL-C`~`胰岛素抵抗风险`, data=gloose_TG))
+summary(aov(`Triglycerides`~`胰岛素抵抗风险`, data=gloose_TG))
+# summary(aov(`Platelets`~`胰岛素抵抗风险`, data=gloose_TG))
+summary(aov(`TG/HDL`~`胰岛素抵抗风险`, data=gloose_TG))
+
+library(ggpubr)
+my_comparisons <- list(c("严重的胰岛素抵抗", "正常"), c("早期胰岛素抵抗", "正常"),c("有胰岛素抵抗的风险", "正常"))
+ggplot(gloose_TG, aes(x=`胰岛素抵抗风险`, y=`BMI`, fill= `胰岛素抵抗风险`)) + 
+  geom_boxplot( outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),width=0.3,color="black")+
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),width=0.3,color="black")+
+  stat_compare_means(comparisons = my_comparisons,label = "p.signif", tip.length=0.02, method = "t.test") +
+  scale_fill_manual(values=c('严重的胰岛素抵抗'="#c55a11", 
+                             '早期胰岛素抵抗'="#ed7d31",
+                             '有胰岛素抵抗的风险'="#a5a5a5", 
+                             '正常'="#b6df89", 
+                             '胰岛素敏感'="#92d050"))+
+  theme_classic()+
+  labs(title = "BMI")+
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        plot.title = element_text(hjust = 0.5))
+```
+
+### 个别特征的异常比例计算
+
+```{r}
+data = readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")
+# BMI
+data$BMI
+case_when(
+  data$BMI<18.5 ~ "体重过低(<18.5)",
+  data$BMI>=18.5&data$BMI<24 ~ "正常(18.5-24)",
+  data$BMI>=24&data$BMI<28 ~ "超重(24-28)",
+  data$BMI>=28 ~ "肥胖(>=28)"
+)%>%
+  table()
+list("男" = c(0, 0.9),"女" = c(0, 0.85))
+case_when(
+  data$`腰臀比`<=0.9&data$sex=="男" ~ "正常",
+  data$`腰臀比`<=0.85&data$sex=="女" ~ "正常",
+  TRUE ~ "偏胖"
+)%>%
+  table()
+
+## 血压
+case_when(
+  data$`Blood pressure-systolic`>140|data$`Blood pressure-diastolic`>90 ~ "高血压",
+  data$`Blood pressure-systolic`<90|data$`Blood pressure-diastolic`<60 ~ "低血压",
+  T ~ "正常"
+)%>%
+  table()
+
+# 小而密低密度脂蛋白胆固醇(sd LDL-C)
+list(
+  "男" = list("年轻"=c(0.246, 1.393), "老年"=c(0.264, 1.362)),
+  "女" = list("年轻"=c(0.243, 1.109), "老年"=c(0.264, 1.362))
+)
+case_when(
+  data$`腰臀比`<=0.9&data$sex=="男" ~ "正常",
+  data$`腰臀比`<=0.85&data$sex=="女" ~ "正常",
+  TRUE ~ "偏胖"
+)%>%
+  table()
+
+prop_feature[prop_feature$feature=="小而密低密度脂蛋白胆固醇(sd LDL-C)",]
+
+# "Total cholesterol" = c(0,5.2),
+case_when(
+  data$`Total cholesterol`<5.2 ~ "正常(2-5.2)",
+  data$`Total cholesterol`>=5.2&data$`Total cholesterol`<6.2 ~ "边缘升高(5.2-6.2)",
+  data$`Total cholesterol`>=6.2 ~ "升高(≥6.2)"
+)%>%
+  table()
+# "" = c(0, 1.7),
+case_when(
+  data$`Triglycerides`<1.7 ~ "正常(0-1.7)",
+  data$`Triglycerides`>=1.7&data$`Triglycerides`<2.3 ~ "边缘升高(1.7-2.3)",
+  data$`Triglycerides`>=2.3 ~ "升高(2.3-5.7)"
+)%>%
+  table()
+# "LDL-C" = c(0,3.33),
+case_when(
+  data$`LDL-C`<3.37 ~ "正常(0-3.37)",
+  data$`LDL-C`>=3.37&data$`LDL-C`<4.12 ~ "边缘升高(3.37-4.12)",
+  data$`LDL-C`>=4.14 ~ "升高(≥4.14)"
+)%>%
+  table()
+# "抗组织谷氨酰胺转移酶抗体 IgG" = c(0.00, 20.00)
+# "抗去酰胺基麦胶蛋白抗体 IgA" = c(0, 10, 15)
+# "抗去酰胺基麦胶蛋白抗体 IgG" = c(0, 10, 15)
+table(data$"抗组织谷氨酰胺转移酶抗体 IgG"<20&as.numeric(gsub("<|>", "", data$"抗去酰胺基麦胶蛋白抗体 IgA"))<10&as.numeric(gsub("<|>", "", data$"抗去酰胺基麦胶蛋白抗体 IgG"))<10)
+table(data$"抗组织谷氨酰胺转移酶抗体 IgG"<20)
+table(as.numeric(gsub("<|>", "", data$"抗去酰胺基麦胶蛋白抗体 IgA"))<10)
+table(as.numeric(gsub("<|>", "", data$"抗去酰胺基麦胶蛋白抗体 IgG"))<10)
+# "抗SCL-70抗体" =  c(0, 20),
+# "抗核糖体P蛋白抗体,定量" = c(0, 20),
+# "抗SSA抗体(SS-A/Ro60)" = c(0, 20),
+# "抗Ro52抗体,定量"  = c(0, 20),
+# "抗SSB抗体(SS-B/La)"  = c(0, 20),
+# "抗Jo-1抗体"  = c(0, 20),
+# "抗Sm抗体"  = c(0, 20),
+# "抗U1RNP抗体"= c(0, 20),
+
+table(data$"抗SCL-70抗体"<20&data$"抗核糖体P蛋白抗体,定量"<20&data$"抗SSA抗体(SS-A/Ro60)"<20&data$"抗Ro52抗体,定量" <20&data$"抗SSB抗体(SS-B/La)" <20&data$"抗Jo-1抗体"<20&data$"抗Sm抗体"<20&data$"抗U1RNP抗体"<20)
+
+
+
+c(0, 1)
+prop_feature[prop_feature$feature=="TG/HDL",]
+prop_feature[prop_feature$feature=="TG/HDL",]
+# "人转化生长因子β1(TGF-β1)" = c(7.58, 18.70),
+prop_feature[prop_feature$feature=="人转化生长因子β1(TGF-β1)",]
+
+# "人黑色素细胞刺激素(MSH)" = c(0.87, 2.58)
+prop_feature[prop_feature$feature=="人黑色素细胞刺激素(MSH)",]
+#  "FEV/FVC" = c(0, 0.7)
+# "肾素浓度(Renin)" = c(3.8,38.8),
+prop_feature[prop_feature$feature=="肾素浓度(Renin)",]
+# "睾酮(T)" = c(15,50)
+prop_feature[prop_feature$feature=="睾酮(T)",]
+#  "Vitamin B2" = c(3, 20),
+# "Vitamin B3" = c(12, 150),
+#  "Vitamin D" = c(20,100),
+prop_feature[prop_feature$feature=="Omega-3指数",]
+
+# "Omega-3指数" = c(8, 100)
+# "Vitamin B9 叶酸" = c(4, 35),
+# "Vitamin B7" = c(0.1, 2),
+#  "Vitamin B6" = c(2, 25),
+# "Vitamin K1" = c(0.1, 2.2)
+prop_feature[prop_feature$feature=="Vitamin K1",]
+prop_feature[prop_feature$feature=="LDL-C",]
+
+prop_feature[prop_feature$feature=="全血铁(Fe)",]
+
+# "血总钙(CA)" = c(2.11, 2.52),
+# "血铁(FE)" = list("男" = c(10.7, 36.7), "女" = c(7.8, 32.2)),
+# "全血钙(Ca)" = list("男" = c(46.7, 64.1), "女" = c(53.3, 68.2)),
+# "Cu/Zn" = c(0.54, 1.68),
+prop_feature[prop_feature$feature=="皮质醇(COR)",]
+prop_feature[prop_feature$feature=="Free T3 to reverse T3 ratio",]
+```
+
+### AMH在黑米饮食人群中的表现
+
+```{r}
+food = food%>%dplyr::filter(`Q1_您的姓名`%in%q1$name)%>%
+  group_by(`Q1_您的姓名`)  %>% slice( n() ) %>% tibble()%>%
+  select(Q1_您的姓名, Q177_您是否正在吃黑米)%>%
+  dplyr::rename(name = Q1_您的姓名, black_rice = Q177_您是否正在吃黑米)
+
+AMH <- readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  dplyr::select(name, sex, age, "抗缪勒管激素(AMH)")%>%
+  drop_na()%>%
+  left_join(food)%>%
+  dplyr::mutate(`抗缪勒管激素(AMH)` = as.numeric(gsub("<|>", "", `抗缪勒管激素(AMH)`)))%>%
+  dplyr::mutate(black_rice = if_else(is.na(black_rice), "否", black_rice))%>%
+  dplyr::mutate(black_rice_s = if_else(black_rice=="否", 0,1))%>%
+  dplyr::filter(age<50)
+
+table(AMH$black_rice)
+
+wilcox.test(AMH[AMH$black_rice=="是",]$`抗缪勒管激素(AMH)`,
+            AMH[AMH$black_rice!="是",]$`抗缪勒管激素(AMH)`)
+summary(aov(`抗缪勒管激素(AMH)` ~ black_rice + age, data = AMH))
+
+summary(glm(`抗缪勒管激素(AMH)` ~ black_rice_s + age, data = AMH))
+
+ggplot(AMH, aes(age, `抗缪勒管激素(AMH)`, color = black_rice))+
+  geom_point()+
+  stat_smooth(alpha=0,method='loess')
+
+```
+
+### 临床FI计算以及分类FI与年龄关联
+
+```{r}
+res <- readr::read_csv("/home/shimw/project/200Human/体检报告/all_clinical.csv")
+FI_lab <- res%>%
+  dplyr::mutate(score = if_else(res=="normal", 1, 0))%>%
+  group_by(name,sex)%>%
+  summarise(FI = sum(score))%>%
+  dplyr::mutate(FI = if_else(sex=="女", FI/120, FI/119))
+
+
+FI_lab = readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  dplyr::select(name, age)%>%
+  left_join(FI_lab, .)
+
+FI_lab_age <- res%>%
+  dplyr::mutate(score = if_else(res=="normal", 1, 0))%>%
+  group_by(feature)%>%
+  summarise(
+    broom::tidy(aov(age ~ score, data = cur_data())),
+    .groups = "keep"
+  )%>%
+  select(feature,term, statistic, p.value) %>% 
+  filter(term != "Residuals")%>%
+  arrange(p.value)
+
+
+
+type_info <- data_frame("feature" = unique(res$feature),# 顺序和表里是一致的
+           "type" = c(rep("病理类", 60), 
+                      rep("激素类", 15), 
+                      rep("营养类", 39),
+                      rep("环境毒素", 8))
+           )
+FI_lab_age <- left_join(FI_lab_age, type_info)
+library(ggsci)
+FI_lab_age%>%
+  mutate(feature = factor(feature, levels = FI_lab_age$feature))%>%
+  ggplot(., aes(feature, -log(p.value), fill = type)) + geom_col()+
+  geom_hline(yintercept = -log(0.05))+
+  theme_bw()+
+  scale_y_continuous(expand = c(0,0))+
+  theme(
+    legend.title = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+    axis.title.x = element_blank()
+  )+
+  scale_fill_manual(values = c("#1d70a9", "#ff7f0e", "#d62728", "#2ca02c"))
+library(showtext) 
+showtext_auto (enable = TRUE) 
+ggsave("/home/shimw/project/200Human/result/000.tijian.age_cor.pdf", width = 14, height = 6)
+
+
+res <- readr::read_csv("/home/shimw/project/200Human/体检报告/all_clinical.csv")
+FI_lab <- res%>%
+  dplyr::mutate(score = if_else(res=="normal", 1, 0))%>%
+  left_join(type_info)
+FI_lab = readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  dplyr::select(name, age)%>%
+  left_join(FI_lab, .)
+
+all_FI <- FI_lab%>%
+  # dplyr::filter(type=="营养类")%>%
+  group_by(name, age, sex)%>%
+  summarise(FI = sum(score))%>%
+  dplyr::mutate(FI = if_else(sex=="女", FI/120, FI/119))
+cor.test(all_FI$FI,all_FI$age)
+
+ggplot(all_FI, aes(x = age, y = FI))+
+  geom_point(col="#546de5",fill="#546de5", shape=16,alpha=0.6)+
+  geom_smooth(method = 'lm', se = F, color = "black",  linewidth = 0.7)+
+  theme_bw() +
+  annotate("text", x = 60, y = 0.97, label = "R = -0.074, P = 0.303",
+           color="black",size = 5, angle=0)+
+  theme(panel.border = element_rect(fill=NA,color="black", 
+                                    size=1.1, linetype="solid")) +
+  theme(plot.title = element_text(size=18,hjust = 0.5),
+        axis.text.x = element_text(size = 16 , color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.text.y = element_text(size = 16, color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.title.x=element_text(size=17,angle = 0),
+        axis.title.y=element_text(size=17,angle = 90),
+        plot.margin = ggplot2::margin(0.2, 0.8, 0.4, 0.4, "cm"),
+        axis.ticks.length = unit(-0.1,"cm"),
+        panel.grid = element_blank() # 删除网格线
+  )+
+  labs(title = "所有指标",x = '年龄', y = '正常指标比例')
+library(showtext) 
+showtext_auto (enable = TRUE) 
+ggsave("/home/shimw/project/200Human/result/000.tijian.all_FI_age.pdf", width = 4.8, height = 4.3)
+
+
+clinical_FI <- FI_lab%>%
+  dplyr::filter(type=="病理类")%>%
+  group_by(name, age, sex)%>%
+  summarise(FI = sum(score)/60)
+cor.test(clinical_FI$FI,clinical_FI$age)
+
+ggplot(clinical_FI, aes(x = age, y = FI))+
+  geom_point(col="#546de5",fill="#546de5", shape=16,alpha=0.6)+
+  geom_smooth(method = 'lm', se = F, color = "black",  linewidth = 0.7)+
+  theme_bw() +
+  annotate("text", x = 60, y = 1, label = "R = -0.198, P = 0.0053",
+           color="black",size = 5, angle=0)+
+  theme(panel.border = element_rect(fill=NA,color="black", 
+                                    size=1.1, linetype="solid")) +
+  theme(plot.title = element_text(size=18,hjust = 0.5),
+        axis.text.x = element_text(size = 16 , color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.text.y = element_text(size = 16, color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.title.x=element_text(size=17,angle = 0),
+        axis.title.y=element_text(size=17,angle = 90),
+        plot.margin = ggplot2::margin(0.2, 0.8, 0.4, 0.4, "cm"),
+        axis.ticks.length = unit(-0.1,"cm"),
+        panel.grid = element_blank() # 删除网格线
+  )+
+  labs(title = "病理类指标",x = '年龄', y = '正常指标比例')
+library(showtext) 
+showtext_auto (enable = TRUE) 
+ggsave("/home/shimw/project/200Human/result/000.tijian.clinical_FI_age.pdf", width = 4.8, height = 4.3)
+
+
+nutrition_FI <- FI_lab%>%
+  dplyr::filter(type=="营养类")%>%
+  group_by(name, age, sex)%>%
+  summarise(FI = sum(score)/39)
+cor.test(nutrition_FI$FI,nutrition_FI$age)
+
+ggplot(nutrition_FI, aes(x = age, y = FI))+
+  geom_point(col="#546de5",fill="#546de5", shape=16,alpha=0.6)+
+  geom_smooth(method = 'lm', se = F, color = "black",  linewidth = 0.7)+
+  theme_bw() +
+  annotate("text", x = 60, y = 1, label = "R = 0.093, P = 0.19",
+           color="black",size = 5, angle=0)+
+  theme(panel.border = element_rect(fill=NA,color="black", 
+                                    size=1.1, linetype="solid")) +
+  theme(plot.title = element_text(size=18,hjust = 0.5),
+        axis.text.x = element_text(size = 16 , color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.text.y = element_text(size = 16, color = 'black',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.title.x=element_text(size=17,angle = 0),
+        axis.title.y=element_text(size=17,angle = 90),
+        plot.margin = ggplot2::margin(0.2, 0.8, 0.4, 0.4, "cm"),
+        axis.ticks.length = unit(-0.1,"cm"),
+        panel.grid = element_blank() # 删除网格线
+  )+
+  labs(title = "营养类指标",x = '年龄', y = '正常指标比例')
+library(showtext) 
+showtext_auto (enable = TRUE) 
+ggsave("/home/shimw/project/200Human/result/000.tijian.nutrition_FI_age.pdf", width = 4.8, height = 4.3)
+
+```
+
+## 血清代谢分析 001.metabolites.R
+
+整理了血清代谢分析代码，更多的代码储存在`/opt/shimw/github/200Human/001.metabolites.R`
+
+### 异常值筛选
+
+```{r}
+library(tidyverse)
+rm(list = ls())
+gc()
+
+#### 加载代谢物数据 ####
+setwd("/home/shimw/project/200Human")
+rawdata = readxl::read_xlsx("./metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, `Blood-TM-1`:`Blood-TM-201`)
+
+## 筛选数据（在50%样本中信号过500）
+filter_undetected_metabolites <- function(data, threshold = 0.5) {
+  # 统计每行（代谢物）中检测到的样本数量
+  detected_counts <- rowSums(data > 500)
+  
+  # 计算检测到的样本百分比
+  detection_percentage <- detected_counts / ncol(data)
+  
+  # 筛选出在50%样本中检测不到的代谢物索引
+  undetected_metabolites_idx <- which(detection_percentage <= threshold)
+  return(undetected_metabolites_idx)
+}
+rawdata%>%
+  dplyr::select(`Blood-TM-1`:`Blood-TM-201`)%>%
+  filter_undetected_metabolites()
+## 没有代谢物低于50%（公司给的应该已经经过过滤和knn填充了）
+
+#### PCA聚类 ####
+## PCA聚类检测离群值
+library(ggplot2)
+library(factoextra)
+
+# 计算PCA主成分
+pca_data <- rawdata%>%
+  dplyr::select(`Blood-TM-1`:`Blood-TM-201`)%>%
+  log10()%>% # 或许不需要进行scale
+  t()%>%prcomp(, scale. = F)
+pca_result <- as.data.frame(pca_data$x)
+kk <- get_pca_ind(pca_data)
+
+p <- fviz_pca_ind(pca_data,
+             geom.ind = "point", # 指定点的形状
+             col.ind = "blue",   # 指定点的颜色
+             addEllipses = TRUE,
+             title = "PCA Analysis")
+## 看着有一部分离群值，但是不知道离了多远
+get_ellipses_outside <- function(p){
+  build <- ggplot_build(p)$data
+  points <- build[[1]]
+  ell <- build[[2]]
+  return(as.logical(sp::point.in.polygon(points$x, points$y, ell$x, ell$y)))
+}
+which(!get_ellipses_outside(p))
+# 5 8 44 91 93 135 158 174 195 196 在置信椭圆外  默认值0.95
+
+# 计算马氏距离
+mahalanobis_distance <- mahalanobis(pca_result[,1:15], colMeans(pca_result[,1:15]), cov(pca_result[,1:15]))
+
+## 设置阈值
+mahalanobis_threshold <- qchisq(0.95, df = ncol(pca_result[,1:15]))
+outliers <- which(mahalanobis_distance > mahalanobis_threshold)
+
+## 原矩阵求距离
+t_log_data <- rawdata%>%
+  dplyr::select(`Blood-TM-1`:`Blood-TM-201`)%>%
+  log10()%>%t()
+mahalanobis_distance <- mahalanobis(t_log_data, colMeans(t_log_data), cov(t_log_data))
+## 报错，协方差矩阵为奇异矩阵。计算发现协方差矩阵的秩只有200，这说明大部分的代谢物有极大程度是相关的
+
+# 使用聚类筛选
+log_data <- rawdata%>%
+  dplyr::select(`Blood-TM-1`:`Blood-TM-201`)%>%
+  log10()
+sampleTree <- hclust(dist(t(log_data)), method = "average")
+plot(sampleTree, cex.lab = 1.5, cex.axis = 1.5, cex.main = 2)
+# 从图中观察到158 和 124 聚类较远，属于离群值
+cor_matrix <- cor(log_data)
+pheatmap::pheatmap(cor_matrix, 
+         main = "Metabolite Correlation Heatmap",
+         clustering_method = "ward.D") 
+min(cor_matrix)
+# 样本相关性最低位0.82
+
+# 计算sd筛选离群值
+log_data <- rawdata%>%
+  dplyr::mutate(across(matches("Blood"), log)) # 之后都是使用log_data
+
+# calculate SD
+filter_outlier_subjects <- function(.x, threshold = 3) {
+  # 计算sd和mean
+  sd_value <- sd(.x)
+  mean_value <- mean(.x)
+  
+  # 筛选离群值的志愿者
+  outlier_subjects_idx <- which(.x > mean_value + threshold*sd_value | .x < mean_value - threshold*sd_value)
+  return(outlier_subjects_idx)
+}
+
+outlier_subjects <- log_data%>%
+  dplyr::select(`Blood-TM-1`:`Blood-TM-201`)%>%
+  apply(., 1, filter_outlier_subjects)%>%unlist()%>%table()
+# 大多数样本都会有一两个值超过5倍的sd，其中124号样本离群值最多，96个代谢物差异较大
+# 如果是3倍sd时，就是158号异常值最多，有296个。以这个标准来看，几乎所有样本都有一两个值有问题
+# 如果是2倍sd，158有约752个值异常了，超过了40%的代谢物异常，这个要重点关注一下
+# 这与之前聚类的结果也一致
+# 暂时不去掉样本
+```
+
+### 性别间差异的代谢物统计
+
+```{r}
+log_data <- rawdata%>%
+  dplyr::mutate(across(matches("Blood"), log)) 
+
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) # 加入年龄
+
+meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(ID="编号", name="姓名", sex="性别")%>%
+  dplyr::left_join(q1) # 合并年龄
+
+
+male_idx <- which(meta_data$sex=="男") # 获取性别的索引号
+female_idx <- which(meta_data$sex=="女")
+
+pvalue <- log_data%>%
+  dplyr::select(`Blood-TM-1`:`Blood-TM-201`)%>%
+  apply(.,1,function(x){wilcox.test(x[male_idx],x[female_idx])$p.value}) # 进行秩和检验
+p_adj <- p.adjust(pvalue, method = 'BH')
+
+
+
+# 进行anova方差分析矫正年龄
+sex_anova <- function(.x){
+  .d = tibble("metabolite" = .x,
+                  "sex" = meta_data$sex,
+                  "age" = meta_data$age)
+  # lm_total <- lm(metabolite~sex+age,data = .d)
+  # anova(lm_total) # 两个函数结果是一样的
+  res = summary(aov(metabolite~sex+age,data = .d))
+  return(res[[1]][["Pr(>F)"]][1]) # 返回sex对应的p值
+}
+p_adj <- log_data%>%
+  dplyr::select(`Blood-TM-1`:`Blood-TM-201`)%>%
+  apply(.,1,sex_anova)%>%p.adjust(., method = 'BH')
+table(p_adj<0.05)
+table(p_adj<0.01)
+table(p_adj<0.001)
+# 加入年龄矫正之后，结果依然相差不大，37.3%的代谢物存在性别差异
+```
+
+### 构建代谢物与临床指标网络
+
+```{r}
+rm(list = ls())
+gc()
+rawdata = readxl::read_xlsx("./metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, `Blood-TM-1`:`Blood-TM-201`)
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) # 加入年龄
+
+meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(ID="编号", name="姓名", sex="性别")%>%
+  dplyr::left_join(q1) # 合并年龄
+
+clinical_indicator <- readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  left_join(., meta_data[,1:2])%>%
+  arrange(ID)
+# https://blog.csdn.net/shwan_ma/article/details/80154888
+# 在进行线性回归时是不需要标准化的，因此使用rawdata
+# which(is.na(clinical_indicator), arr.ind = TRUE)# 检测NA值
+
+metabolomics_data <- rawdata%>%
+  dplyr::select(paste("Blood-TM", clinical_indicator$ID, sep="-"))%>%
+  t()%>%as_tibble()%>%rename_all(~rawdata$Compounds)%>%
+  dplyr::select(-Creatinine, -`Uric acid`)%>% #临床指标中有这两个值
+  bind_cols(clinical_indicator, .)%>%
+  dplyr::select(-`霉菌毒素(mycotoxins)`, -`草甘膦(Glyphosate)`)%>%# 这两个值全是阴性，不用做
+  dplyr::mutate(`抗核抗体(ANA)总抗体` = if_else(`抗核抗体(ANA)总抗体`=="阴性", 0, 1))
+# variable_pairs <- t(combn(names(metabolomics_data)[4:ncol(metabolomics_data)], 2, simplify = TRUE))
+
+"L-Leucine"%in%names(metabolomics_data)
+"L-Norvaline"
+"L-Isoleucine"
+metabolomics_data%>%
+  dplyr::select("name", "sex", "age", "BMI", "Vitamin A", "L-Leucine", "L-Norvaline", "L-Isoleucine", "A/G")%>%
+  write_excel_csv("/home/shimw/project/200Human/result/001.metabolites.some.disease.csv")
+
+variable_pairs <- expand.grid(names(clinical_indicator)[4:123],
+                              c(names(clinical_indicator)[3:122], 
+                                rawdata$Compounds), stringsAsFactors = F)
+variable_pairs <- variable_pairs%>%
+  dplyr::filter(Var1!=Var2)
+
+## 线性回归模型矫正性别和年龄。其实应该加上BMI的，之后在讨论吧
+perform_regression <- function(metabolite) {
+  metabolite = as.vector(metabolite)
+  one_formula <- as.formula(paste("`",metabolite[1], "` ~ `", metabolite[2], "` + age + sex", sep = "")) 
+  if (metabolite[1]=="抗核抗体(ANA)总抗体") {
+    fit = glm(one_formula, data = metabolomics_data)
+  } else{
+    .d = metabolomics_data%>%
+      dplyr::select(metabolite[1], metabolite[2], age, sex, BMI)%>%
+      tidyr::drop_na()%>%
+      dplyr::mutate_at(c(metabolite[1], metabolite[2]), ~ as.numeric(gsub("<|>", "", .)))
+    if (length(unique(.d$sex))==1) {
+      one_formula <- as.formula(paste("`",metabolite[1], "` ~ `", metabolite[2], "` + age", sep = "")) 
+    }
+    fit <- lm(one_formula, data = .d, )
+  }
+  sumx <- summary(fit)
+  ct <- sumx$coefficients
+  pvalue = min(ct[-c(1, nrow(ct)),'Pr(>|t|)'])
+  beta = ct[-c(1, nrow(ct)),"Estimate"][which.min(ct[-c(1, nrow(ct)),'Pr(>|t|)'])]
+  df = tibble::tibble("factor1"=metabolite[1],
+                 "factor2"=metabolite[2],
+                 "pvalue"=pvalue,
+                 "beta" = beta)
+  return(df)
+}
+
+metabolite_regression <- apply(variable_pairs, 1, perform_regression)%>%
+  dplyr::bind_rows()
+# readr::write_csv(metabolite_regression, "/home/shimw/project/200Human/result/001.metabolite_regression.csv")
+
+```
+
+### AMH相关代谢物统计
+
+```{r}
+metabolite_regression <- readr::read_csv("/home/shimw/project/200Human/result/001.metabolite_regression.csv")
+# AMH的相关代谢物
+AMH = metabolite_regression%>%
+  filter(factor1=="抗缪勒管激素(AMH)")%>%
+  dplyr::mutate(padj=p.adjust(pvalue, method = "bonferroni"))
+AMH_net <- readxl::read_xlsx("/home/shimw/project/200Human/metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `物质一级分类`,`Class II`,`物质二级分类`,cpd_ID,HMDB)%>%
+  dplyr::filter(Compounds%in%AMH[AMH$pvalue<0.05,]$factor2)%>%
+  select(HMDB, cpd_ID, Compounds, `Class I`, `物质一级分类`,`Class II`,`物质二级分类`)
+
+table(AMH_net$`物质一级分类`)%>%
+  as.data.frame()%>%
+  dplyr::mutate(Var1 = factor(Var1, levels = rev(c("脂肪酰类", "甘油磷脂类","氨基酸及其代谢物", "杂环化合物","有机酸及其衍生物","苯及其衍生物","激素及激素相关物质","醇、胺类", "其他","核苷酸及其代谢物","鞘脂类", "甘油脂类","生物碱","辅酶和维生素","碳水化合物及其代谢物","醛、酮、酯类","胆汁酸","色胺、胆碱、色素","萜类"))))%>%
+  ggplot(.,aes(Var1, Freq)) + geom_col()+theme_classic() +
+  geom_text(aes(label = Freq), position = position_dodge(0.9), hjust = -0.2, size = 5)+
+  theme(
+    legend.position="none",
+    axis.title.x = element_blank(),
+    axis.title.y =element_blank(),
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16)
+  )+
+  coord_flip()+
+  scale_y_continuous(expand = c(0,0), limits = c(0,85))
+```
+
+### 分临床类型统计相关代谢物
+
+```{r}
+metabolite_regression <- metabolite_regression%>%
+  arrange(factor(factor1, levels = names(clinical_indicator)[4:123]))%>%
+  dplyr::mutate(padj=p.adjust(pvalue, method = "bonferroni"))%>%
+  dplyr::filter(padj<0.05)%>%
+  dplyr::mutate(edge=-log10(padj))
+normalize_clinical_indicator <- readr::read_csv("/home/shimw/project/200Human/体检报告/000.normalize_clinical_indicator.csv")%>%
+  left_join(., meta_data[,1:2])%>%
+  arrange(ID)
+
+blood_pressure <- c("Blood pressure-systolic", "Blood pressure-diastolic") # 血压
+blood_lipid <- c("Total cholesterol", "Triglycerides", "LDL-C", "HDL-C", "TG/HDL") # 血脂 
+blood_glucose <- c("Fasting Glucose",  "postprandial blood glucose") # 血糖 
+liver_func <- c("BUN",  "Creatinine",  "Uric acid") # 肝功能
+
+blood_pressure_net <- metabolite_regression%>%
+  dplyr::filter(factor1%in%blood_pressure|factor1%in%blood_pressure)
+
+
+blood_lipid_net <- metabolite_regression%>%
+  dplyr::filter(factor1%in%blood_lipid|factor1%in%blood_lipid)
+
+
+blood_glucose_net <- metabolite_regression%>%
+  dplyr::filter(factor1%in%blood_glucose|factor1%in%blood_glucose)
+
+blood_liver_net <- metabolite_regression%>%
+  dplyr::filter(factor1%in%liver_func|factor1%in%liver_func)
+
+
+## 分血液检查的类型进行网络观察
+# 身体 BMI 
+# 血压 
+# 肾功能 
+# 血常规 Leukocyte ：Basophil
+
+nurtition_net <- metabolite_regression%>%
+  dplyr::filter(factor1%in%names(clinical_indicator)[81:117])
+
+disease_net <- metabolite_regression%>%
+  dplyr::filter(factor1%in%names(clinical_indicator)[1:64])
+
+disease_net <- disease_net%>%
+  dplyr::group_by(factor1)%>%
+  dplyr::mutate(BP = row_number())
+
+
+disease_count = disease_net%>%
+  group_by(factor1)%>%
+  summarise(count = n())%>%
+  arrange(factor(factor1, levels = unique(metabolite_regression$factor1)[1:27]))%>%
+  mutate(Length = 50)
+
+chr_pos <- disease_count%>%
+  mutate(total = cumsum(Length) - Length)
+Snp_pos <- chr_pos %>%
+  left_join(disease_net, ., by="factor1")%>%
+  mutate(BPcum = if_else(count>50, Length/count * BP  + total, 
+                         total + 25 - count/2 + BP))%>%
+  mutate(factor1 = factor(factor1, levels = disease_count$factor1))
+X_axis <-  Snp_pos %>% group_by(factor1) %>% summarize(center=( max(BPcum) + min(BPcum) ) / 2 )
+library(ggrepel)
+p <- ggplot(Snp_pos, aes(x=BPcum, y=-log10(padj))) +
+  #设置点的大小，透明度
+  geom_point(aes(color=factor1), size=1.3) +
+  geom_label_repel( data=Snp_pos[Snp_pos$factor1=="血糖"&Snp_pos$edge>30,], aes(label=factor2), size=3)+
+  #设置颜色
+  scale_color_manual(values = rep(c("grey", "skyblue"), 14 )) +
+  #设定X轴
+  scale_x_continuous(label = X_axis$factor1, breaks= X_axis$center ) +
+  #去除绘图区和X轴之间的gap
+  #设置主题
+  theme_bw() +
+  theme(
+    legend.position="none",
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size = 12),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5, size = 12),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.length.x = unit(1,"mm"),
+    axis.ticks.length.y = unit(1,"mm")
+  )
+p
+library(showtext) 
+showtext_auto (enable = TRUE) 
+
+ggsave("/home/shimw/project/200Human/result/001.metabolites.disease_manhattan.pdf", width = 8, height = 6)
+
+
+# 病理类指标相关代谢物表格，用来做代谢物来源的鉴定
+rawdata%>%
+  dplyr::filter(Compounds%in%disease_net$factor2)%>%
+  select(HMDB, cpd_ID, Compounds)%>%
+  dplyr::rename(HMDBID=HMDB, KEGGID=cpd_ID, Name=Compounds)%>%
+  readr::write_excel_csv("/home/shimw/project/200Human/result/001.metabolites.disease_origin.csv")
+
+```
+
+### 胰岛素抵抗相关代谢物
+
+```{r}
+HOMA_net <- disease_net%>%
+  dplyr::filter(factor1=="HOMA-IR")
+HOMA_net <- readxl::read_xlsx("./metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `物质一级分类`,`Class II`,`物质二级分类`,cpd_ID,HMDB)%>%
+  dplyr::filter(Compounds%in%HOMA_net$factor2)%>%
+  select(HMDB, cpd_ID, Compounds, `Class I`, `物质一级分类`,`Class II`,`物质二级分类`)%>%
+  left_join(HOMA_net, ., by = c("factor2" = "Compounds"))
+
+table(HOMA_net$`物质一级分类`)%>%
+  as.data.frame()%>%
+  dplyr::mutate(Var1 = factor(Var1, levels = rev(c(
+    "甘油脂类", "甘油磷脂类", "鞘脂类", "氨基酸及其代谢物",
+    "脂肪酰类", "甾醇脂类", "醛、酮、酯类", "碳水化合物及其代谢物"
+  ))))%>%
+  ggplot(.,aes(Var1, Freq)) + geom_col()+theme_classic2() +
+  geom_text(aes(label = Freq), position = position_dodge(0.9), hjust = -0.2, size = 5)+
+  theme(
+    legend.position="none",
+    axis.title.x = element_blank(),
+    axis.title.y =element_blank(),
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16)
+  )+
+  coord_flip()+
+  scale_y_continuous(expand = c(0,0), limits = c(0,85))
+ggsave("/home/shimw/project/200Human/result/001.metabolites.HOMA_class.pdf", width = 5, height = 3.3)
+
+#### 随机森林 ####
+
+library(tidygraph)
+meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名")%>%
+  dplyr::rename(ID="编号", name="姓名")
+
+subject_HOMA = readr::read_csv("/home/shimw/project/200Human/体检报告/all_clinical.csv")%>%
+  dplyr::filter(feature=="HOMA-IR")%>%
+  dplyr::select(name, res)%>%
+  left_join(meta_data)%>%
+  arrange(ID)%>%
+  dplyr::mutate(ID=paste("Blood-TM", ID, sep="-"))
+
+data <- readxl::read_xlsx("./metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, subject_HOMA$ID)%>%
+  dplyr::filter(Compounds%in%HOMA_net$factor2)%>%
+  tibble::column_to_rownames("Compounds")%>%
+  t()%>%as.data.frame()%>%
+  mutate(HOMA_IR = factor(subject_HOMA$res))
+
+met_HOMA = names(data)
+names(data)[1:111] = paste("m",1:111, sep = "")
+
+
+
+library(randomForest)
+library(pROC)
+set.seed(888)#888
+# 使用留一法进行训练和评估
+samp = sample(1:197, 197*0.7)
+data_train <- data[samp, ]
+data_test <- data[-samp, ]
+HOMA_rf = randomForest(HOMA_IR ~., data = data_train, importance = TRUE, proximity = TRUE, ntree = 500)
+rf_pred <- predict(HOMA_rf, data_test, type = "prob")
+HOMAroc <- roc(data_test$HOMA_IR, 
+               rf_pred[,2],
+               # smooth = TRUE,
+               ci = T,
+               auc = T)
+auc(HOMAroc) # 0.84
+library(ROCR)
+HOMApred <- prediction(rf_pred[,2], 
+                       data_test$HOMA_IR)
+HOMAperf <- performance(HOMApred,"tpr","fpr")
+HOMAx <- unlist(HOMAperf@x.values)  ##提取x值
+HOMAy <- unlist(HOMAperf@y.values)
+HOMAplotdata <- data.frame("x"=HOMAx,"y"=HOMAy) 
+p4 <- ggplot() + 
+  geom_path(data=HOMAplotdata,aes(x = x, y = y), colour = '#d31919',size=2, linetype='solid') +
+  geom_line(aes(x=c(0,1),y=c(0,1)),color = "black",size = 1.1,linetype=2) +
+  annotate("text", x = 0.73, y = 0.25, label = "AUC = 0.83",
+           color="black",size = 10, angle=0, fontface="bold") +
+  theme_bw()+
+  scale_colour_gradient(name = 'False positive rate', low = 'blue', high = 'red') +
+  # 坐标轴保留一位小数
+  scale_x_continuous(expand = c(0,0),limits = c(0,1),
+                     breaks = seq(0,1,by = 0.2),
+                     labels = scales::number_format(accuracy = 0.1)) +
+  scale_y_continuous(expand = c(0,0),limits = c(0,1),
+                     breaks = seq(0,1,by = 0.2),
+                     labels = scales::number_format(accuracy = 0.1)) +
+  theme(plot.title = element_text(face = 'bold',size=15)) +
+  theme(plot.margin = ggplot2::margin(0.3, 0.4, 0.1, 0.1, "cm")) +
+  # theme_bw(base_family = "sans",base_size = 18,
+  #          base_line_size = 1,base_rect_size = 1) +
+  theme(legend.title=element_blank()) +
+  theme(plot.title = element_text(size = 18,hjust = 0.5),
+        legend.background = element_blank(),
+        legend.position = 'none') +
+  theme(axis.text.x = element_text(size = 16 , color = 'black',face='bold',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.text.y = element_text(size = 16, color = 'black',face='bold',
+                                   vjust = 0.5, hjust = 0.5, angle = 0),
+        axis.title.x=element_text(size=25,angle = 0,face='bold'),
+        axis.title.y=element_text(size=25,angle = 90,face='bold'),
+        panel.grid = element_blank() # 删除网格线
+  ) +
+  # 加粗边框
+  theme(panel.border = element_rect(fill=NA,color="black", 
+                                    size=1.1, linetype="solid")) +
+  # 调整坐标轴刻度线长度
+  theme(axis.ticks.length = unit(-0.1,"cm")) +
+  labs(title = NULL,x = "False positive rate", y = "Ture positive rate")
+ggsave(p4, file='/home/shimw/project/200Human/result/001.HOMA-rf.top10.pdf', width=5, height=5)
+myfeature_importance <- as.data.frame(importance(HOMA_rf))
+myfeature_importance$feature = met_HOMA[-112]
+top20_myfeature_importance <- myfeature_importance%>%arrange(desc(MeanDecreaseGini))%>%
+  head(n = 20)%>%
+  mutate(feature = factor(feature, levels = rev(feature)))
+top20_myfeature_importance%>%
+  ggplot(.,aes(feature, MeanDecreaseGini)) + geom_col()+
+  theme_classic2()+
+  theme(
+    legend.position="none",
+    axis.title.y =element_blank(),
+    axis.title.x =element_text(size = 16),
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16)
+  )+
+    coord_flip()+labs(y = "Gini index")
+ggsave(file='/home/shimw/project/200Human/result/001.HOMA-rf_feature.importance.pdf', width=5, height=4.7)
+
+
+data <- readxl::read_xlsx("./metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, subject_HOMA$ID)%>%
+  dplyr::filter(Compounds%in%top20_myfeature_importance$feature[1:10])%>%
+  tibble::column_to_rownames("Compounds")%>%
+  t()%>%as.data.frame()%>%
+  mutate(HOMA_IR = factor(subject_HOMA$res))
+met_HOMA = names(data)
+names(data)[1:(length(met_HOMA)-1)] = paste("m",1:(length(met_HOMA)-1), sep = "")
+```
+
+### 代谢物异常统计
+
+```{r}
+#### 范围统计 ####
+rawdata = readxl::read_xlsx("./metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds,`物质`, `Class I`, `物质一级分类`,`Class II`,`物质二级分类`, `Blood-TM-1`:`Blood-TM-201`)
+
+
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) # 加入年龄
+
+meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(ID="编号", name="姓名", sex="性别")%>%
+  dplyr::left_join(q1) # 合并年龄
+
+clinical_indicator <- readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  left_join(., meta_data[,1:2])%>%
+  arrange(ID)%>%
+  dplyr::mutate(ID=paste("Blood-TM", ID, sep="-"))%>%
+  select(ID, name,sex,age)
+
+
+kk = lapply(rawdata$Compounds, function(x){
+  .df = rawdata%>%
+    filter(Compounds==x)%>%
+    select(,-c(1:6))
+  .num = as.numeric(.df) # 不 scale
+  # .num = as.numeric(scale(as.numeric(.df))) # scale
+  mean_value = mean(.num)
+  sd_value = sd(.num)
+  # outlier_subjects_idx <- which(.num > mean_value + 3*sd_value | .num < mean_value - 3*sd_value)
+  # .df[,outlier_subjects_idx]
+  return(tibble("Compounds"= x,
+                "ID" = names(.df),
+                "value" = .num,
+                "mean" = mean_value,
+                "sd_value" = sd_value))
+})%>%bind_rows()%>%
+  filter(ID%in%clinical_indicator$ID)%>%
+  left_join(clinical_indicator)
+kk = kk%>%mutate(status = case_when(
+  value > mean + (3*sd_value) ~ "higher",
+  value < mean - (3*sd_value) ~ "lower",
+  TRUE ~ "normal"
+))%>%left_join(rawdata[,c(1:6)])%>%
+  select(Compounds, `物质`, `Class I`, `物质一级分类`,`Class II`,`物质二级分类`, value, name,  sex, age, status, mean, sd_value)
+
+readr::write_excel_csv(kk, "/home/shimw/project/200Human/result/001.metabolites.status.csv")
+
+aa = kk%>%
+  group_by(Compounds, status)%>%
+  summarise(count = n())
+readr::write_excel_csv(aa, "/home/shimw/project/200Human/result/001.metabolites.proporion.csv")
+
+
+bb = kk%>%
+  group_by(name, status)%>%
+  summarise(count = n())%>%
+  filter(status=="normal")%>%
+  mutate(out_metabolites = (2325 - count)/2325*100)%>%
+  select(name,out_metabolites)%>%
+  left_join(clinical_indicator)%>%
+  select(-ID)
+cor.test(bb$out_metabolites,bb$age, method = "spearman")
+readr::write_excel_csv(bb, "/home/shimw/project/200Human/result/001.metabolites.subject.csv")
+
+library(ggprism)
+ggplot(bb, aes(x=out_metabolites))+
+  geom_histogram(binwidth = 0.2, alpha=0.8,colour="black",size=0.4)+
+  theme_prism(base_size = 14)+
+  scale_y_continuous(limits = c(0, 40), expand = c(0, 0))+
+  labs(x = "proportion")
+
+ggplot(bb, aes(x = age, y = out_metabolites))+
+  geom_point()+
+  geom_smooth(method = 'lm', se = F)+
+  theme_prism(base_size = 14)+
+  scale_y_continuous(expand = c(0, 0))+
+  annotate("text", x = 60, y = 7, label = "R = 0.16, p = 0.02",
+           color="black",size = 5, angle=0, fontface="bold")+
+  labs(y="proportion")
+
+```
+
+### CAD评估 神经酰胺
+
+```{r}
+# 参考 https://academic.oup.com/eurheartj/article/41/3/371/5519585
+# CERT2评分
+## 计算Cer(d18:1/24:1) / Cer(d18:1/24:0), Cer(d18:1/16:0) / PC 16:0/22:5
+## Cer(d18:1/16:0) / PC(14:0/22:6), PC 16:0/16:0
+## 个体的所有三个神经酰胺比率和每个的浓度与整个研究人群进行比较。
+## 如果该变量属于第 2 个四分位数, 则得分+1, 如果属于第 3 个四分位数, 则得分+2, 第四个则+3分。
+## 得分范围从 0 到 12, 根据得分, 受试者被分为四个风险类别(0-3、4-6、7-8 和 9-12)
+as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:1)",7:207])
+as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:0)",7:207])
+as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/16:0)",7:207])
+as.numeric(rawdata[rawdata$Compounds=="PC(16:0_22:5)",7:207])
+as.numeric(rawdata[rawdata$Compounds=="PC(14:0_22:6)",7:207])
+as.numeric(rawdata[rawdata$Compounds=="PC(16:0_16:0)",7:207])
+
+a1 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:1)",7:207])/as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:0)",7:207])
+a2 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/16:0)",7:207])/as.numeric(rawdata[rawdata$Compounds=="PC(16:0_22:5)",7:207])
+a3 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/16:0)",7:207])/as.numeric(rawdata[rawdata$Compounds=="PC(14:0_22:6)",7:207])
+a4 = as.numeric(rawdata[rawdata$Compounds=="PC(16:0_16:0)",7:207])
+
+
+cert2 = case_when(
+  a1<=quantile(a1)[2] ~ 0,
+  a1<=quantile(a1)[3] ~ 1,
+  a1<=quantile(a1)[4] ~ 2,
+  a1<=quantile(a1)[5] ~ 3
+)+
+case_when(
+  a2<=quantile(a2)[2] ~ 0,
+  a2<=quantile(a2)[3] ~ 1,
+  a2<=quantile(a2)[4] ~ 2,
+  a2<=quantile(a2)[5] ~ 3
+)+
+case_when(
+  a3<=quantile(a3)[2] ~ 0,
+  a3<=quantile(a3)[3] ~ 1,
+  a3<=quantile(a3)[4] ~ 2,
+  a3<=quantile(a3)[5] ~ 3
+)+
+case_when(
+  a4<=quantile(a4)[2] ~ 0,
+  a4<=quantile(a4)[3] ~ 1,
+  a4<=quantile(a4)[4] ~ 2,
+  a4<=quantile(a4)[5] ~ 3
+)
+## cert1 评分好像效果更好
+b1 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/16:0)",7:207])
+b2 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/18:0)",7:207])
+b3 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:1)",7:207])
+b4 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/16:0)",7:207])/as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:0)",7:207])
+b5 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/18:0)",7:207])/as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:0)",7:207])
+b6 = as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:1)",7:207])/as.numeric(rawdata[rawdata$Compounds=="Cer(d18:1/24:0)",7:207])
+cert1 = case_when(
+  b1<=quantile(b1)[3] ~ 0,
+  b1<=quantile(b1)[4] ~ 1,
+  b1<=quantile(b1)[5] ~ 2
+)+
+  case_when(
+    b2<=quantile(b2)[3] ~ 0,
+    b2<=quantile(b2)[4] ~ 1,
+    b2<=quantile(b2)[5] ~ 2
+  )+
+  case_when(
+    b3<=quantile(b3)[3] ~ 0,
+    b3<=quantile(b3)[4] ~ 1,
+    b3<=quantile(b3)[5] ~ 2
+  )+
+  case_when(
+    b4<=quantile(b4)[3] ~ 0,
+    b4<=quantile(b4)[4] ~ 1,
+    b4<=quantile(b4)[5] ~ 2
+  )+
+  case_when(
+    b5<=quantile(b5)[3] ~ 0,
+    b5<=quantile(b5)[4] ~ 1,
+    b5<=quantile(b5)[5] ~ 2
+  )+
+  case_when(
+    b5<=quantile(b5)[3] ~ 0,
+    b5<=quantile(b5)[4] ~ 1,
+    b5<=quantile(b5)[5] ~ 2
+  )
+  
+
+
+cert = tibble("ID" = names(rawdata[,7:207]),
+              "cert1" = cert1,
+              "cert2" = cert2)
+
+
+clinical_indicator <- readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  left_join(., meta_data[,1:2])%>%
+  arrange(ID)%>%
+  dplyr::mutate(ID=paste("Blood-TM", ID, sep="-"))%>%
+  left_join(cert)
+
+
+cor.test(clinical_indicator$`LDL-C`/clinical_indicator$`HDL-C`, clinical_indicator$cert1)
+
+clinical_indicator%>%
+  select(name, sex, age, cert1,cert2)%>%
+  mutate(risk = case_when(
+    cert2 <= 3 ~ "低风险",
+    cert2 <= 6 ~ "中风险",
+    cert2 <= 8 ~ "较高风险",
+    cert2 <= 12 ~ "高风险"
+    ))%>%
+  readr::write_excel_csv("/home/shimw/project/200Human/result/001.metabolites.CAD.risk.csv")
+
+```
+
+## 肠道代谢物结果 001.gutmetabolite.R
+
+整理了肠道代谢物代码，更多的代码储存在`/opt/shimw/github/200Human/001.gutmetabolite.R`
+
+```{r}
+library(tidyverse)
+rm(list = ls())
+gc()
+
+#### 加载代谢物数据 ####
+setwd("/home/shimw/project/200Human")
+rawdata = readxl::read_xlsx("./metabolites/data/gut_ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, starts_with("Feces-TM"))
+library(ggplot2)
+library(factoextra)
+# 计算PCA主成分
+pca_data <- rawdata%>%
+  dplyr::select(starts_with("Feces-TM"))%>%
+  log10()%>% # 或许不需要进行scale
+  t()%>%prcomp(, scale. = F)
+pca_result <- as.data.frame(pca_data$x)
+kk <- get_pca_ind(pca_data)
+
+p <- fviz_pca_ind(pca_data,
+                  geom.ind = "point", # 指定点的形状
+                  col.ind = "blue",   # 指定点的颜色
+                  addEllipses = TRUE,
+                  title = "PCA Analysis")
+
+get_ellipses_outside <- function(p){
+  build <- ggplot_build(p)$data
+  points <- build[[1]]
+  ell <- build[[2]]
+  return(as.logical(sp::point.in.polygon(points$x, points$y, ell$x, ell$y)))
+}
+which(!get_ellipses_outside(p))
+```
+
+### 构建肠道代谢与临床指标网络
+
+```{r}
+#### 构建代谢物自身的网络 ####
+rawdata = readxl::read_xlsx("./metabolites/data/gut_ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, starts_with("Feces-TM"))
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) # 加入年龄
+blood_meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(BID="编号", name="姓名", sex="性别")
+meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/microbiome/粪便采样编号.xlsx")%>%
+  rename("ID" = "编号", name = "姓名")%>%
+  dplyr::left_join(q1)%>% # 合并年龄
+  dplyr::left_join(blood_meta_data)
+
+clinical_indicator <- readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  left_join(., meta_data[,c(1,2,4)])%>%
+  arrange(BID)
+rawdata <- rawdata%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, paste("Feces-TM", clinical_indicator$ID, sep="-"))%>% # 按照blood编号的顺序，这个是其他组也在用的编号
+  dplyr::rename_all(function(.){c("Compounds", "Class I", "Class II","cpd_ID","HMDB",
+                           paste("Feces-TM", clinical_indicator$BID, sep="-")
+                           )})
+
+
+metabolomics_data <- rawdata%>%
+  dplyr::select(paste("Feces-TM", clinical_indicator$BID, sep="-"))%>%
+  t()%>%as_tibble()%>%rename_all(~rawdata$Compounds)%>%
+  dplyr::select(-Creatinine, -`Uric acid`, -`Vitamin E`)%>% #临床指标中有这三个值
+  bind_cols(clinical_indicator, .)%>%
+  dplyr::select(-`霉菌毒素(mycotoxins)`, -`草甘膦(Glyphosate)`)%>%# 这两个值全是阴性，不用做
+  dplyr::mutate(`抗核抗体(ANA)总抗体` = if_else(`抗核抗体(ANA)总抗体`=="阴性", 0, 1))
+
+variable_pairs <- expand.grid(names(clinical_indicator)[3:122], 
+                              c(names(clinical_indicator)[3:122], 
+                                rawdata$Compounds), stringsAsFactors = F)%>%
+  dplyr::filter(Var1!=Var2)
+
+## 线性回归模型矫正性别和年龄。其实应该加上BMI的，之后在讨论吧
+perform_regression <- function(metabolite) {
+  metabolite = as.vector(metabolite)
+  one_formula <- as.formula(paste("`",metabolite[1], "` ~ `", metabolite[2], "` + age + sex", sep = "")) 
+  if (metabolite[1]=="抗核抗体(ANA)总抗体") {
+    fit = glm(one_formula, data = metabolomics_data)
+  } else{
+    .d = metabolomics_data%>%
+      dplyr::select(metabolite[1], metabolite[2], age, sex, BMI)%>%
+      tidyr::drop_na()%>%
+      dplyr::mutate_at(c(metabolite[1], metabolite[2]), ~ as.numeric(gsub("<|>", "", .)))
+    if (length(unique(.d$sex))==1) {
+      one_formula <- as.formula(paste("`",metabolite[1], "` ~ `", metabolite[2], "` + age", sep = "")) 
+    }
+    fit <- lm(one_formula, data = .d, )
+  }
+  sumx <- summary(fit)
+  ct <- sumx$coefficients
+  pvalue = min(ct[-c(1, nrow(ct)),'Pr(>|t|)'])
+  beta = ct[-c(1, nrow(ct)),"Estimate"][which.min(ct[-c(1, nrow(ct)),'Pr(>|t|)'])]
+  df = tibble::tibble("factor1"=metabolite[1],
+                      "factor2"=metabolite[2],
+                      "pvalue"=pvalue,
+                      "beta" = beta)
+  return(df)
+}
+metabolite_regression <- apply(variable_pairs, 1, perform_regression)%>%
+  dplyr::bind_rows()
+readr::write_csv(metabolite_regression, "/home/shimw/project/200Human/result/001.gutmetabolite_regression.csv")
+```
+
+### 肠道代谢物异常统计
+
+```{r}
+#### 范围统计 ####
+rawdata = readxl::read_xlsx("./metabolites/data/gut_ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds,`物质`, `Class I`, `物质一级分类`,`Class II`,`物质二级分类`, starts_with("Feces-TM"))
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) # 加入年龄
+blood_meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(BID="编号", name="姓名", sex="性别")
+meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/microbiome/粪便采样编号.xlsx")%>%
+  rename("ID" = "编号", name = "姓名")%>%
+  dplyr::left_join(q1)%>% # 合并年龄
+  dplyr::left_join(blood_meta_data)
+clinical_indicator <- readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")%>%
+  left_join(., meta_data[,c(1,2,4)])%>%
+  arrange(BID)%>%
+  dplyr::mutate(BID=paste("Feces-TM", BID, sep="-"))
+
+rawdata = readxl::read_xlsx("./metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, `Blood-TM-1`:`Blood-TM-201`)
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) 
+
+rawdata <- rawdata%>%
+  dplyr::select("Compounds","物质", "Class I", "物质一级分类","Class II","物质二级分类", paste("Feces-TM", clinical_indicator$ID, sep="-"))%>% # 按照blood编号的顺序，这个是其他组也在用的编号
+  dplyr::rename_all(function(.){c("Compounds","物质", "Class I", "物质一级分类","Class II","物质二级分类",
+                                 clinical_indicator$BID
+  )})
+
+
+kk = lapply(rawdata$Compounds, function(x){
+  .df = rawdata%>%
+    filter(Compounds==x)%>%
+    select(,-c(1:6))
+  .num = as.numeric(scale(as.numeric(.df)))
+  mean_value = mean(.num)
+  sd_value = sd(.num)
+  # outlier_subjects_idx <- which(.num > mean_value + 3*sd_value | .num < mean_value - 3*sd_value)
+  # .df[,outlier_subjects_idx]
+  return(tibble("Compounds"= x,
+                "ID" = names(.df),
+                "value" = .num))
+})%>%bind_rows()%>%
+  filter(ID%in%clinical_indicator$BID)%>%
+  left_join(clinical_indicator[,c("BID", "name","sex","age")], by = c("ID" = "BID"))%>%
+  mutate(status = case_when(
+    value > 3 ~ "higher",
+    value < -3 ~ "lower",
+    TRUE ~ "normal"
+  ))%>%left_join(rawdata[,c(1:6)])%>%
+    select(Compounds, `物质`, `Class I`, `物质一级分类`,`Class II`,`物质二级分类`, value, name,  sex, age, status)
+
+readr::write_excel_csv(kk, "/home/shimw/project/200Human/result/001.gut.metabolites.status.csv")
+
+aa = kk%>%
+  group_by(Compounds, status)%>%
+  summarise(count = n())
+readr::write_excel_csv(aa, "/home/shimw/project/200Human/result/001.gut.metabolites.proporion.csv")
+
+bb = kk%>%
+  group_by(name, status)%>%
+  summarise(count = n())%>%
+  filter(status=="normal")%>%
+  mutate(out_metabolites = (2424 - count)/2424*100)%>%
+  select(name,out_metabolites)%>%
+  left_join(clinical_indicator)%>%
+  select(-ID)
+cor.test(bb$out_metabolites,bb$age, method = "spearman")
+readr::write_excel_csv(bb, "/home/shimw/project/200Human/result/001.gut.metabolites.subject.csv")
+
+library(ggprism)
+ggplot(bb, aes(x=out_metabolites))+
+  geom_histogram(binwidth = 0.2, alpha=0.8,colour="black",size=0.4)+
+  theme_prism(base_size = 14)+
+  scale_y_continuous(limits = c(0, 30), expand = c(0, 0))+
+  labs(x = "proportion")
+
+ggplot(bb, aes(x = age, y = out_metabolites))+
+  geom_point()+
+  geom_smooth(method = 'lm', se = F)+
+  theme_prism(base_size = 14)+
+  scale_y_continuous(expand = c(0, 0))+
+  annotate("text", x = 60, y = 6, label = "R = -0.09, p = 0.22",
+           color="black",size = 5, angle=0, fontface="bold")+
+  labs(y="proportion")
+
+metabolite_regression <- readr:: read_csv("/home/shimw/project/200Human/result/001.gutmetabolite_regression.csv")
+metabolite_regression <- metabolite_regression%>%
+  arrange(factor(factor1, levels = names(clinical_indicator)[4:123]))%>%
+  dplyr::mutate(padj=p.adjust(pvalue, method = "bonferroni"))%>%
+  dplyr::filter(padj<0.05)%>%
+  dplyr::mutate(edge=-log10(padj))
+
+
+disease_net <- metabolite_regression%>%
+  dplyr::filter(factor1%in%names(clinical_indicator)[1:64])
+
+disease_net <- disease_net%>%
+  dplyr::group_by(factor1)%>%
+  dplyr::mutate(BP = row_number())
+
+## 临床代谢
+readxl::read_xlsx("/home/shimw/project/200Human/metabolites/data/gut_ALL_sample_data.xlsx")%>%
+  dplyr::filter(Compounds%in%disease_net$factor2)%>%
+  select(HMDB, cpd_ID, Compounds)%>%
+  dplyr::rename(HMDBID=HMDB, KEGGID=cpd_ID, Name=Compounds)%>%
+  readr::write_excel_csv("/home/shimw/project/200Human/result/001.gutmetabolites.disease_origin.csv")
+
+
+```
+
+## 转录组分析 003.RNA-Seq.R
+
+整理了转录组代码，储存在`/opt/shimw/github/200Human/003.RNA-Seq.R`
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(factoextra)
+
+TPM = readr::read_tsv("/NAS/shimw/200Human/RNA-Seq/RNAseq.rawtpm")
+pca_data <- TPM %>% 
+  dplyr::select(-gene_symbol)%>%
+  # make the "gene" column become the rownames of the table
+  column_to_rownames("gene_ID") %>% 
+  # coerce to a matrix
+  as.matrix() %>% 
+  # transpose the matrix so that rows = samples and columns = variables
+  t()%>%prcomp(, scale. = F)
+pca_result <- as.data.frame(pca_data$x)
+kk <- get_pca_ind(pca_data)
+
+p <- fviz_pca_ind(pca_data,
+                  geom.ind = "point", # 指定点的形状
+                  col.ind = "blue",   # 指定点的颜色
+                  addEllipses = TRUE,
+                  title = "PCA Analysis")
+get_ellipses_outside <- function(p){
+  build <- ggplot_build(p)$data
+  points <- build[[1]]
+  ell <- build[[2]]
+  return(as.logical(sp::point.in.polygon(points$x, points$y, ell$x, ell$y)))
+}
+rownames(pca_result)[which(!get_ellipses_outside(p))]
+# 3,15,19,39,73,78,79,81,115,128
+dim(TPM)
+# 使用聚类筛选
+TPM_df = TPM %>% 
+  dplyr::select(-gene_symbol)%>%
+  # make the "gene" column become the rownames of the table
+  column_to_rownames("gene_ID")
+sampleTree <- hclust(dist(t(TPM_df)), method = "average")
+plot(sampleTree, cex.lab = 1.5, cex.axis = 1.5, cex.main = 2)
+
+
+cor_matrix <- cor(TPM_df)
+pheatmap::pheatmap(cor_matrix, 
+                   main = "Metabolite Correlation Heatmap",
+                   clustering_method = "ward.D") 
+# 从热图中观察到115,15,79,81,3,73,128,19,78属于离群值
+
+mean_exp <- apply(TPM_df, 1, mean)
+
+correlation <- apply(TPM_df, 2, function(x) cor(x, mean_exp))
+correlation[correlation<0.85]
+
+correlation["wholeblood_39B"]
+
+min(cor_matrix)
+
+
+quality = readxl::read_xlsx("/home/shimw/project/200Human/RNA-Seq/RNA样本提取评级情况.xlsx")%>%
+  mutate("aa" = str_c(`样本名称`,"B",sep = ""))
+
+
+
+c(3,15,19,39,73,78,79,81,115,128)
+
+names(TPM)[3:136][stringr::str_split_fixed(names(TPM)[3:136],"_",2)[,2]%in%quality$aa[quality$评级=="C"]]
+
+
+quality = readxl::read_xlsx("/home/shimw/project/200Human/RNA-Seq/RNA样本提取评级情况.xlsx")
+quality[quality$样本名称%in%c(3,15,19,39,73,78,79,81,115,128),]
+
+###  预测年龄
+library(RNAAgeCalc)
+library(tidyverse)
+rawcount = readr::read_tsv("/NAS/shimw/200Human/RNA-Seq/RNAseq.rawcount")%>%
+  select(-gene_symbol)%>%
+  mutate(gene_ID = stringr::str_split_fixed(gene_ID, "\\.", 2)[,1])%>%
+  column_to_rownames("gene_ID")
+
+
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) # 加入年龄
+meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(ID="编号", name="姓名", sex="性别")%>%
+  dplyr::left_join(q1)%>% # 合并年龄
+  dplyr::mutate(sampleid = paste("wholeblood_", ID, "B", sep = ""))
+
+chronage = data.frame(sampleid = colnames(rawcount), age = meta_data$age[match(colnames(rawcount), meta_data$sampleid)])
+
+
+
+res = predict_age(exprdata = rawcount, tissue = "blood", exprtype = "counts", idtype= "ENSEMBL",
+                  chronage = chronage)
+
+res$RNAAge
+makeplot(res)
+cor.test(res$RNAAge,res$ChronAge)
+### 基本不能使用，相关性太差了
+```
+
+## 肠道与血清代谢物网络 004.metabolite_network.R
+
+代码在`/opt/shimw/github/200Human/004.metabolite_network.R`
+
+```{r}
+### 肠道代谢与血液代谢的相关性
+setwd("/home/shimw/project/200Human")
+
+blood_meta_data <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(ID="编号", name="姓名", sex="性别")
+blood_rawdata = readxl::read_xlsx("./metabolites/data/ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, `Blood-TM-1`:`Blood-TM-201`)
+
+
+
+gut_rawdata = readxl::read_xlsx("./metabolites/data/gut_ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, starts_with("Feces-TM"))
+blood_meta_data <- readxl::read_xlsx("./问卷/治未病采血登记表.xlsx", skip = 2)%>%
+  dplyr::select("编号", "姓名",   "性别")%>%
+  dplyr::rename(BID="编号", name="姓名", sex="性别")
+gut_meta_data <- readxl::read_xlsx("./microbiome/粪便采样编号.xlsx")%>%
+  rename("ID" = "编号", name = "姓名")%>%
+  dplyr::left_join(blood_meta_data)%>%
+  dplyr::filter(paste("Feces-TM", ID, sep="-")%in%names(gut_rawdata))%>%
+  arrange(BID)
+gut_rawdata <- readxl::read_xlsx("./metabolites/data/gut_ALL_sample_data.xlsx")%>%
+  dplyr::select(Compounds, `Class I`, `Class II`,cpd_ID,HMDB, paste("Feces-TM", gut_meta_data$ID, sep="-"))%>% # 按照blood编号的顺序，这个是其他组也在用的编号
+  dplyr::rename_all(function(.){c("Compounds", "Class I", "Class II","cpd_ID","HMDB",
+                                  paste("Feces-TM", gut_meta_data$BID, sep="-")
+  )})
+
+
+## 保证人数相同
+remain_id = intersect(blood_meta_data$ID, gut_meta_data$BID)
+blood_metabolomics_data <- blood_rawdata%>%
+  dplyr::select(paste("Blood-TM", remain_id, sep="-"))%>%
+  t()%>%as_tibble()%>%rename_all(~blood_rawdata$Compounds)
+gut_metabolomics_data <- gut_rawdata%>%
+  dplyr::select(paste("Feces-TM", remain_id, sep="-"))%>%
+  t()%>%as_tibble()%>%rename_all(~gut_rawdata$Compounds)
+## 提取年龄和性别
+sex_info = blood_meta_data
+q1 <- readxl::read_xlsx("/home/shimw/project/200Human/问卷/体检问卷结果.xlsx")%>%
+  dplyr::select(name,age) # 加入年龄
+sex_info = blood_meta_data%>%
+  dplyr::filter(ID%in%remain_id)%>%
+  left_join(q1)
+
+
+perform_regression <- function(metabolite) {
+  metabolite = as.vector(metabolite)
+  one_formula <- as.formula("blood ~ gut + sex + age") 
+  .d = data_frame("blood" = blood_metabolomics_data[, metabolite[1]][[1]],
+              "gut" = gut_metabolomics_data[, metabolite[2]][[1]],
+              "sex" = sex_info$sex,
+              "age" = sex_info$age)
+  fit <- lm(one_formula, data = .d, )
+  sumx <- summary(fit)
+  ct <- sumx$coefficients
+  pvalue = min(ct[-c(1, nrow(ct)),'Pr(>|t|)'])
+  beta = ct[-c(1, nrow(ct)),"Estimate"][which.min(ct[-c(1, nrow(ct)),'Pr(>|t|)'])]
+  df = tibble::tibble("blood"=metabolite[1],
+                      "gut"=metabolite[2],
+                      "pvalue"=pvalue,
+                      "beta" = beta)
+  return(df)
+}
+
+variable_pairs <- expand.grid(names(blood_metabolomics_data), 
+                              names(gut_metabolomics_data), stringsAsFactors = F)
+
+blood_gut_regression <- apply(variable_pairs, 1, perform_regression)%>%
+  dplyr::bind_rows()%>%
+  dplyr::mutate(padj=p.adjust(pvalue, method = "bonferroni"))
+
+write_csv(blood_gut_regression, "/home/shimw/project/200Human/result/004.metabolite_network.blood_gut_regression.csv")
+
+
+## 计算两者同时相关的临床指标 ####
+clinical_type <- readr::read_csv( "/home/shimw/project/200Human/体检报告/clinical_type.csv")%>%
+  rename(clinical = feature)
+clinical_indicator <- readr::read_csv("/home/shimw/project/200Human/问卷/000.all_clinical_indicator.csv")
+blood_metabolite_regression <- readr::read_csv("/home/shimw/project/200Human/result/001.metabolite_regression.csv")%>%
+  dplyr::mutate(padj=p.adjust(pvalue, method = "bonferroni"))%>%
+  dplyr::filter(padj<0.05)%>%
+  dplyr::rename(clinical = factor1, blood = factor2,
+                "blood_beta" = beta, "blood_padj" = padj)%>%
+  select(clinical,blood,blood_beta,blood_padj)%>%
+  left_join(clinical_type)%>%
+  filter(clinical!="钠(Na)")#钠离子太多了，因此我删一下
+
+gut_metabolite_regression <- readr::read_csv("/home/shimw/project/200Human/result/001.gutmetabolite_regression.csv")%>%
+  dplyr::mutate(padj=p.adjust(pvalue, method = "bonferroni"))%>%
+  dplyr::filter(padj<0.05)%>%
+  dplyr::rename(clinical = factor1, gut = factor2,
+                "gut_beta" = beta, "gut_padj" = padj)%>%
+  select(clinical,gut,gut_beta,gut_padj)%>%
+  left_join(clinical_type)%>%
+  filter(clinical!="钠(Na)")
+
+kk = as.data.frame(table(blood_metabolite_regression$type))
+kk$type = "血液代谢"
+aa = as.data.frame(table(gut_metabolite_regression$type))
+aa$type = "肠道代谢"
+library(ggsci)
+ggplot(rbind(aa,kk), aes(x = type, y = Freq, fill = Var1)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.5) +
+  labs(title = "不同类别指标相关代谢物数量",
+       x = " ",
+       y = "代谢物数量",
+       fill = "") +
+  theme_bw()+
+  theme(text = element_text(size = 14)) +
+  scale_fill_simpsons()
+ggsave("/home/shimw/project/200Human/result/004.metabolite_relevant_metabolitesnumber.pdf",width = 4,height = 4)
+
+total_counts <- aggregate(Freq ~ type, data = rbind(aa, kk), sum)
+combined_data <- merge(rbind(aa, kk), total_counts, by = "type", suffixes = c("_metabolite", "_total"))
+combined_data$proportion <- combined_data$Freq_metabolite / combined_data$Freq_total
+ggplot(combined_data, aes(x = type, y = proportion, fill = Var1)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.5) +
+  labs(title = "不同类别指标相关代谢物比例",
+       x = " ",
+       y = "代谢物比例",
+       fill = "") +
+  theme_bw()+
+  theme(text = element_text(size = 14)) +
+  scale_fill_simpsons()
+ggsave("/home/shimw/project/200Human/result/004.metabolite_relevant_metabolites_proportion.pdf",width = 4,height = 4)
+
+intersect(blood_metabolite_regression$clinical, gut_metabolite_regression$clinical)
+# 共有的临床指标有28个, 但是特别奇怪的是Na离子相关的代谢物太多了一个就有5597130个配对，其他配对不到他的零头
+all_regression = left_join(blood_metabolite_regression, gut_metabolite_regression)%>%
+  tidyr::drop_na()
+
+
+## 筛选临床病理代谢物
+
+clinical_regression <- all_regression%>%
+  dplyr::filter(clinical%in%names(clinical_indicator)[1:64])
+## 然后结果是6264个配对,15个病理指标
+## 两个项目共有的代谢物有608个，但是与相同临床指标相关且代谢物相同的情况只有4种
+# 1 Total cholesterol     Uric acid  0.0454       2.01e- 2 Uric…  4.54e-2 2.09e- 2
+# 2 血糖                  N-acetyl-… 0.0000104    5.26e-36 N-ac…  5.61e-7 6.08e-11
+# 3 糖化血红蛋白(HBA1c)   N-acetyl-… 0.00000471   3.95e-19 N-ac…  2.34e-7 4.68e- 4
+# 4 超敏C-反应蛋白(hsCRP) N-acetyl-… 0.0000466    7.67e-14 N-ac…  4.02e-6 1.34e-19
+```
